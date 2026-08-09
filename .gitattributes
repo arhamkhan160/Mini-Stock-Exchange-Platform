@@ -1,0 +1,7 @@
+# Shell scripts and Dockerfiles MUST keep LF endings, otherwise Linux containers
+# fail with "exec /app/entrypoint.sh: no such file or directory" on Windows clones.
+*.sh        text eol=lf
+entrypoint* text eol=lf
+Dockerfile  text eol=lf
+*.yml       text eol=lf
+*.yaml      text eol=lf
