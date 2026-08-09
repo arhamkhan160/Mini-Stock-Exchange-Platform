@@ -8,7 +8,7 @@ from datetime import datetime, timezone, timedelta
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "libs")))
 
 from common.symbols import SYMBOLS, SEED_PRICES
-from common.redis_client import init_redis, redis, close_redis
+from common.redis_client import make_redis
 
 import asyncpg
 
@@ -56,7 +56,7 @@ async def seed_market_data():
     
     random.seed(42)  # reproducible
 
-    await init_redis(REDIS_URL)
+    redis = make_redis(REDIS_URL)
 
     for sym in SYMBOLS.keys():
         print(f"Generating for {sym}...")
@@ -134,7 +134,7 @@ async def seed_market_data():
         await redis.set(f"md:last_price:{sym}", last_close)
         
     await conn.close()
-    await close_redis()
+    await redis.aclose()
     print("Seed complete.")
 
 if __name__ == "__main__":

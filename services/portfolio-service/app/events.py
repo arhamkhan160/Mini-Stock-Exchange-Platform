@@ -6,7 +6,8 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from common.money import to_money
-from common.redis_client import redis, distributed_lock
+from common.redis_client import distributed_lock
+from .redis_conn import redis
 from common.symbols import normalize_symbol
 from app.models import Holding, ProcessedEvent, ShareReservation, TradeHistory
 

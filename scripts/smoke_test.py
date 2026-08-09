@@ -32,7 +32,9 @@ FAILED = 0
 SKIPPED = 0
 
 
-def ok(label: str) -> None:
+def ok(label: str, detail: str = "") -> None:
+    # Accepts a detail argument it ignores, so the `(ok if cond else fail)(...)`
+    # call sites can pass the same two arguments to either branch.
     print(f"  OK  {label}")
 
 
@@ -168,73 +170,90 @@ def run() -> None:
         else:
             skip("9. sell without shares", "user B was not created")
 
-        # ---- 10. give B inventory: seed a counterparty C, cross a trade ----------
-        user_c = None
+        # ---- 10. give B inventory ------------------------------------------------
+        # A MARKET buy lifts whatever is resting. This works on an empty book
+        # (nothing fills, reported honestly) and on a seeded one alike — unlike
+        # pairing two specific users, which cannot be forced once other
+        # liquidity exists, because price-time priority matches the best price
+        # first.
         if user_b:
-            user_c = register(client, "c")
-            if user_c:
-                client.post("/api/account/deposit", headers=user_c["headers"], json={"amount": "100000.00"})
-                r_sell = place_order(client, user_c["headers"], "AAPL", "SELL", "LIMIT", 10, "200.00")
-                r_buy = place_order(client, h_b, "AAPL", "BUY", "LIMIT", 10, "200.00")
-                if r_sell.status_code == 201 and r_buy.status_code == 201:
-                    st = poll_order_status(client, h_b, r_buy.json()["id"], {"FILLED", "REJECTED", "CANCELLED"})
-                    if st == "FILLED":
-                        ok("10. B buys 10 AAPL from a seeded counterparty -> FILLED")
-                    else:
-                        fail("10. B's seed buy did not fill", f"status={st}")
+            r_buy = place_order(client, h_b, "AAPL", "BUY", "MARKET", 10)
+            if r_buy.status_code == 201:
+                st = poll_order_status(client, h_b, r_buy.json()["id"], {"FILLED", "CANCELLED", "REJECTED"})
+                if st == "FILLED":
+                    ok("10. B buys 10 AAPL at market -> FILLED")
                 else:
-                    fail("10. seeding B's inventory", f"sell={r_sell.status_code} buy={r_buy.status_code}")
+                    fail("10. B's market buy did not fill", f"status={st} (is there resting liquidity?)")
             else:
-                fail("10. seed counterparty C", "could not register")
+                fail("10. seeding B's inventory", f"buy={r_buy.status_code} {r_buy.text[:120]}")
         else:
             skip("10. give B inventory", "user B was not created")
 
-        # ---- 11/12. B sells to A, poll both to FILLED -----------------------------
+        # ---- 11/12. both sides cross the live book --------------------------------
         order_a_id = order_b_id = None
+        a_filled_qty, a_avg_price = 0, 0.0
         if user_a and user_b:
-            r_sell = place_order(client, h_b, "AAPL", "SELL", "LIMIT", 10, "200.00")
-            r_buy = place_order(client, h_a, "AAPL", "BUY", "LIMIT", 10, "200.00")
-            if r_sell.status_code == 201 and r_buy.status_code == 201:
-                order_b_id, order_a_id = r_sell.json()["id"], r_buy.json()["id"]
-                ok("11. B places SELL 10 @ 200, A places BUY 10 @ 200")
+            book = client.get("/api/book/AAPL").json()
+            best_ask, best_bid = book.get("best_ask"), book.get("best_bid")
+            # Deliberately aggressive, so each order crosses instead of resting.
+            buy_px = f"{float(best_ask) * 1.02:.2f}" if best_ask else "250.00"
+            sell_px = f"{float(best_bid) * 0.98:.2f}" if best_bid else "150.00"
+
+            r_buy = place_order(client, h_a, "AAPL", "BUY", "LIMIT", 10, buy_px)
+            r_sell = place_order(client, h_b, "AAPL", "SELL", "LIMIT", 10, sell_px)
+            if r_buy.status_code == 201 and r_sell.status_code == 201:
+                order_a_id, order_b_id = r_buy.json()["id"], r_sell.json()["id"]
+                ok(f"11. A buys 10 @ {buy_px}, B sells 10 @ {sell_px} (both cross the book)")
                 st_a = poll_order_status(client, h_a, order_a_id, {"FILLED", "REJECTED", "CANCELLED"})
                 st_b = poll_order_status(client, h_b, order_b_id, {"FILLED", "REJECTED", "CANCELLED"})
                 if st_a == "FILLED" and st_b == "FILLED":
                     ok("12. both orders reach FILLED within 10s")
                 else:
                     fail("12. orders did not both fill", f"A={st_a} B={st_b}")
+                detail = client.get(f"/api/orders/{order_a_id}", headers=h_a)
+                if detail.status_code == 200:
+                    a_filled_qty = int(detail.json()["filled_quantity"])
+                    a_avg_price = float(detail.json()["avg_fill_price"])
+                    # An aggressor must never pay MORE than its limit.
+                    if a_avg_price <= float(buy_px) + 1e-9:
+                        ok(f"12b. A filled {a_filled_qty} @ avg {a_avg_price:.4f}, at or better than its {buy_px} limit")
+                    else:
+                        fail("12b. A paid more than its limit", f"avg={a_avg_price} limit={buy_px}")
             else:
-                fail("11. placing the crossing orders", f"sell={r_sell.status_code} buy={r_buy.status_code}")
+                fail("11. placing the crossing orders", f"buy={r_buy.status_code} sell={r_sell.status_code}")
         else:
             skip("11/12. crossing trade", "users not created")
 
-        # ---- 13. A's portfolio ------------------------------------------------------
-        if user_a:
+        # ---- 13. A's portfolio reflects the actual fill ----------------------------
+        if user_a and a_filled_qty:
             r = client.get("/api/portfolio", headers=h_a)
             if r.status_code == 200:
                 holding = next((h for h in r.json().get("holdings", []) if h["symbol"] == "AAPL"), None)
-                if holding and int(holding["quantity"]) == 10 and abs(float(holding["avg_cost"]) - 200.0) < 0.01:
-                    ok("13. A's portfolio shows 10 AAPL @ avg 200")
+                # A bought only in this test, so avg cost must equal the fill price.
+                if holding and int(holding["quantity"]) == a_filled_qty and abs(float(holding["avg_cost"]) - a_avg_price) < 0.01:
+                    ok(f"13. A's portfolio shows {a_filled_qty} AAPL @ avg {a_avg_price:.2f}")
                 else:
-                    fail("13. A's portfolio", f"holding={holding}")
+                    fail("13. A's portfolio", f"holding={holding} expected qty={a_filled_qty} avg={a_avg_price}")
             else:
                 fail("13. GET /api/portfolio for A", f"{r.status_code}")
         else:
-            skip("13. A's portfolio", "user A was not created")
+            skip("13. A's portfolio", "no fill to check")
 
-        # ---- 14. A's balance after the trade -----------------------------------------
-        if user_a:
+        # ---- 14. A's cash matches the fill exactly ---------------------------------
+        if user_a and a_filled_qty:
             r = client.get("/api/account/balance", headers=h_a)
             if r.status_code == 200:
                 b = r.json()
-                if float(b["cash_balance"]) <= 100000 - 2000 + 0.01 and float(b["held_balance"]) == 0.0:
-                    ok("14. A's cash is reduced by ~2000, held back to 0")
+                spent = round(a_filled_qty * a_avg_price, 2)
+                expected = 100000.0 - spent
+                if abs(float(b["cash_balance"]) - expected) < 0.05 and float(b["held_balance"]) == 0.0:
+                    ok(f"14. A's cash is exactly 100000 - {spent:.2f}, and nothing is still held")
                 else:
-                    fail("14. A's balance", str(b))
+                    fail("14. A's balance", f"{b} expected cash~{expected:.2f}")
             else:
                 fail("14. GET /api/account/balance for A", f"{r.status_code}")
         else:
-            skip("14. A's balance", "user A was not created")
+            skip("14. A's balance", "no fill to check")
 
         # ---- 15. A's notifications ------------------------------------------------------
         if user_a:
@@ -252,8 +271,17 @@ def run() -> None:
         r = client.get("/api/book/AAPL")
         if r.status_code == 200:
             book = r.json()
-            gone = not any(o for o in book.get("bids", []) + book.get("asks", []))
-            (ok if gone else fail)("16b. book/AAPL has no resting orders from the filled trade", "" if gone else str(book))
+            bids, asks = book.get("bids", []), book.get("asks", [])
+            # The book legitimately holds other users' orders, so assert the
+            # invariant that must ALWAYS hold instead of expecting it empty:
+            # bids descending, asks ascending, and never crossed.
+            bids_sorted = all(float(bids[k]["price"]) > float(bids[k + 1]["price"]) for k in range(len(bids) - 1))
+            asks_sorted = all(float(asks[k]["price"]) < float(asks[k + 1]["price"]) for k in range(len(asks) - 1))
+            uncrossed = (not bids or not asks) or float(bids[0]["price"]) < float(asks[0]["price"])
+            if bids_sorted and asks_sorted and uncrossed:
+                ok(f"16b. book/AAPL is ordered and uncrossed ({len(bids)} bid / {len(asks)} ask levels)")
+            else:
+                fail("16b. book/AAPL invariant broken", str(book))
         else:
             fail("16b. GET /api/book/AAPL", f"{r.status_code}")
 
@@ -263,7 +291,10 @@ def run() -> None:
             if r.status_code == 201:
                 oid = r.json()["id"]
                 rc = client.delete(f"/api/orders/{oid}", headers=h_a)
-                if rc.status_code == 200:
+                # 202 Accepted is the documented response: cancellation is
+                # two-phase, so the order goes CANCEL_PENDING until the book
+                # confirms removal.
+                if rc.status_code in (200, 202):
                     st = poll_order_status(client, h_a, oid, {"CANCELLED"}, timeout=5.0)
                     bal = client.get("/api/account/balance", headers=h_a).json()
                     if st == "CANCELLED" and float(bal["held_balance"]) == 0.0:
@@ -303,8 +334,14 @@ def run() -> None:
             uri = f"{WS_BASE}/ws/market?symbols=AAPL"
             async with websockets.connect(uri, open_timeout=5) as ws:
                 with httpx.Client(base_url=API_BASE, timeout=10.0) as trigger_client:
-                    place_order(trigger_client, user_c["headers"] if user_c else h_b, "AAPL", "SELL", "LIMIT", 1, "199.00")
-                    place_order(trigger_client, h_a, "AAPL", "BUY", "LIMIT", 1, "199.00")
+                    # B owns shares by now (step 10), so B can sell into the book
+                    # and A can lift it — either side printing a trade emits a tick.
+                    book = trigger_client.get("/api/book/AAPL").json()
+                    bid, ask = book.get("best_bid"), book.get("best_ask")
+                    sell_px = f"{float(bid) * 0.98:.2f}" if bid else "199.00"
+                    buy_px = f"{float(ask) * 1.02:.2f}" if ask else "199.00"
+                    place_order(trigger_client, h_b, "AAPL", "SELL", "LIMIT", 1, sell_px)
+                    place_order(trigger_client, h_a, "AAPL", "BUY", "LIMIT", 1, buy_px)
                 deadline = time.monotonic() + 5.0
                 while time.monotonic() < deadline:
                     remaining = max(0.1, deadline - time.monotonic())

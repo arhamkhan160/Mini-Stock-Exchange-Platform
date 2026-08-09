@@ -12,8 +12,17 @@ from sqlalchemy.exc import IntegrityError
 
 from common.config import settings
 from common.db import make_engine, make_sessionmaker, session_dependency
-from common.events import Broker
-from common.redis_client import redis, init_redis, close_redis, distributed_lock
+from common.events import (
+    ORDER_CANCELLED,
+    ORDER_REJECTED,
+    Q_PORTFOLIO_ORDER_CANCELLED,
+    Q_PORTFOLIO_ORDER_REJECTED,
+    Q_PORTFOLIO_TRADE_EXECUTED,
+    TRADE_EXECUTED,
+    Broker,
+)
+from common.redis_client import distributed_lock
+from .redis_conn import redis
 from common.security import get_current_user, CurrentUser, require_internal_key
 from common.symbols import SYMBOLS, normalize_symbol
 from common.money import money_str, to_money
@@ -27,11 +36,10 @@ engine = make_engine(settings.DATABASE_URL)
 Session = make_sessionmaker(engine)
 get_session = session_dependency(Session)
 
-broker = Broker(settings.RABBITMQ_URL)
+broker = Broker(settings.RABBITMQ_URL, settings.SERVICE_NAME)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    await init_redis(settings.REDIS_URL)
     await broker.connect()
     
     async def _trade_executed(env):
@@ -40,14 +48,14 @@ async def lifespan(app: FastAPI):
     async def _order_cancelled(env):
         await handle_order_cancelled_or_rejected(env, Session)
         
-    await broker.consume("trade.executed", "q.portfolio.trade_executed", _trade_executed)
-    await broker.consume("order.cancelled", "q.portfolio.order_cancelled", _order_cancelled)
-    await broker.consume("order.rejected", "q.portfolio.order_rejected", _order_cancelled)
+    await broker.consume(Q_PORTFOLIO_TRADE_EXECUTED, [TRADE_EXECUTED], _trade_executed)
+    await broker.consume(Q_PORTFOLIO_ORDER_CANCELLED, [ORDER_CANCELLED], _order_cancelled)
+    await broker.consume(Q_PORTFOLIO_ORDER_REJECTED, [ORDER_REJECTED], _order_cancelled)
 
     yield
     
     await broker.close()
-    await close_redis()
+    await redis.aclose()
     await engine.dispose()
 
 app = FastAPI(lifespan=lifespan, title="Portfolio Service", version="1.0.0")

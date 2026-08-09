@@ -48,6 +48,28 @@ PASS, FAIL, PENDING, WARN = "PASS", "FAIL", "PENDING", "WARN"
 results: list[tuple[str, str, str]] = []
 
 
+def env_value(key: str, default: str) -> str:
+    """Read a key from .env (or the real environment), so this keeps working
+    when the deployment uses credentials other than the defaults."""
+    import os
+
+    if key in os.environ:
+        return os.environ[key]
+    env_file = ROOT / ".env"
+    if env_file.exists():
+        for line in env_file.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line.startswith(f"{key}=") and not line.startswith("#"):
+                return line.split("=", 1)[1].strip()
+    return default
+
+
+RABBIT_AUTH = (
+    env_value("RABBITMQ_DEFAULT_USER", "guest"),
+    env_value("RABBITMQ_DEFAULT_PASS", "guest"),
+)
+
+
 def record(status: str, label: str, detail: str = "") -> None:
     results.append((status, label, detail))
     print(f"  {status:<7} {label}" + (f" - {detail}" if detail else ""))
@@ -124,9 +146,9 @@ def check_jwt_agreement(fingerprints: dict[str, str]) -> None:
 def check_rabbitmq() -> None:
     print("\n-- rabbitmq --")
     try:
-        _status, queues = get_json("http://localhost:15672/api/queues", auth=("guest", "guest"))
+        _status, queues = get_json("http://localhost:15672/api/queues", auth=RABBIT_AUTH)
     except Exception as exc:
-        record(FAIL, "rabbitmq management API", str(exc)[:70])
+        record(FAIL, f"rabbitmq management API (as {RABBIT_AUTH[0]})", str(exc)[:70])
         return
     names = {q.get("name", "") for q in queues}
     record(PASS, "rabbitmq reachable", f"{len(names)} queues declared")

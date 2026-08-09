@@ -43,7 +43,33 @@ def ok(label: str) -> None:
 INITIAL_REVISION = "0001"
 
 
+def _require_destructive_optin() -> None:
+    """This self-check DELETES every row in its tables.
+
+    Pointed at the shared development database it silently destroys seeded
+    demo data, so it refuses to run unless the caller opts in explicitly.
+
+        SELFCHECK_DESTRUCTIVE=1 python selfcheck.py
+
+    Prefer a throwaway database:
+        DATABASE_URL=postgresql+asyncpg://mse:mse_pw@localhost:PORT/scratch_db
+    """
+    import os
+    import sys
+
+    if os.getenv("SELFCHECK_DESTRUCTIVE") == "1":
+        return
+    print(
+        "REFUSING TO RUN: this self-check wipes its tables and would destroy any "
+        "seeded data in the database it is pointed at. Re-run with "
+        "SELFCHECK_DESTRUCTIVE=1 if that is what you want, ideally against a "
+        "scratch DATABASE_URL."
+    )
+    sys.exit(2)
+
+
 async def reset() -> None:
+    _require_destructive_optin()
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
         await conn.execute(

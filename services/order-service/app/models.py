@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 
 from sqlalchemy import BigInteger, CheckConstraint, DateTime, Index, Numeric, String, UniqueConstraint, func
@@ -7,6 +7,19 @@ from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from common.db import Base
+
+
+def _utcnow() -> datetime:
+    """Python-side timestamp default.
+
+    `server_default` alone leaves the attribute unloaded on a newly inserted
+    row, so serialising that row triggers a lazy refresh — which in async
+    SQLAlchemy raises MissingGreenlet. Populating it client-side means the
+    object is complete the moment it is flushed, with no extra round trip.
+    The server_default stays as the guarantee for rows written outside the ORM.
+    """
+    return datetime.now(timezone.utc)
+
 
 # --- the state machine -------------------------------------------------------
 PENDING = "PENDING"
@@ -58,10 +71,11 @@ class Order(Base):
     reserved_amount: Mapped[Decimal | None] = mapped_column(Numeric(18, 4), nullable=True)
     reject_reason: Mapped[str | None] = mapped_column(String(MAX_REASON_LEN), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=func.now()
+        DateTime(timezone=True), nullable=False, default=_utcnow, server_default=func.now()
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+        DateTime(timezone=True), nullable=False,
+        default=_utcnow, onupdate=_utcnow, server_default=func.now(),
     )
 
     __table_args__ = (
@@ -85,7 +99,7 @@ class OrderEvent(Base):
     to_status: Mapped[str] = mapped_column(String(20), nullable=False)
     note: Mapped[str | None] = mapped_column(String(MAX_REASON_LEN), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=func.now()
+        DateTime(timezone=True), nullable=False, default=_utcnow, server_default=func.now()
     )
 
 

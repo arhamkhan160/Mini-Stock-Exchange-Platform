@@ -4,7 +4,7 @@
 // looks like one product. Do not hand-roll new button/card styles in a page.
 
 import type { ReactNode } from "react";
-import { toneOf } from "@/lib/format";
+import { num, toneOf } from "@/lib/format";
 
 export function Card({
   title, right, children, className = "",
@@ -99,24 +99,83 @@ const LABEL: Record<string, string> = {
   CANCEL_PENDING: "CANCELLING…",
 };
 
-export function Badge({ value }: { value: string }) {
+const VARIANT: Record<string, string> = {
+  success: "bg-up/15 text-up",
+  warning: "bg-warn/15 text-warn",
+  danger: "bg-down/15 text-down",
+  info: "bg-accent/15 text-accent",
+};
+
+/** Either a domain value (`<Badge value="FILLED" />`) or free content with an
+ *  explicit tone (`<Badge variant="success">Live</Badge>`). */
+export function Badge({
+  value,
+  variant,
+  children,
+}: {
+  value?: string;
+  variant?: "success" | "warning" | "danger" | "info";
+  children?: ReactNode;
+}) {
+  const tone = variant ? VARIANT[variant] : BADGE[value ?? ""] ?? "bg-panel2 text-muted";
+  const label = children ?? LABEL[value ?? ""] ?? value;
+  return <span className={`rounded px-2 py-0.5 text-[11px] font-semibold ${tone}`}>{label}</span>;
+}
+
+/**
+ * A value coloured by its sign.
+ *
+ * Pass `children` to render your own content, or a `format` and let Tone do it
+ * — it already knows the sign, so it is the natural place to put the +/- and
+ * the fixed decimals.
+ */
+export function Tone({
+  value,
+  format,
+  prefix,
+  children,
+}: {
+  value: string | number;
+  format?: "money" | "pct" | "price";
+  prefix?: string;
+  children?: ReactNode;
+}) {
+  const className = `num ${toneOf(value)}`;
+  if (children !== undefined) return <span className={className}>{children}</span>;
+
+  const n = num(value);
+  const magnitude = Math.abs(n);
+  const sign = n > 0 ? "+" : n < 0 ? "-" : "";
+  const body =
+    format === "pct"
+      ? `${magnitude.toFixed(2)}%`
+      : `${prefix ?? ""}${magnitude.toLocaleString("en-US", {
+          minimumFractionDigits: 2,
+          maximumFractionDigits: 2,
+        })}`;
   return (
-    <span className={`rounded px-2 py-0.5 text-[11px] font-semibold ${BADGE[value] ?? "bg-panel2 text-muted"}`}>
-      {LABEL[value] ?? value}
+    <span className={className}>
+      {sign}
+      {body}
     </span>
   );
 }
 
-/** Value coloured by sign. Pass a money string straight from the API. */
-export function Tone({ value, children }: { value: string | number; children: ReactNode }) {
-  return <span className={`num ${toneOf(value)}`}>{children}</span>;
-}
-
-export function Empty({ title, hint }: { title: string; hint?: string }) {
+export function Empty({
+  title,
+  hint,
+  subtitle,
+}: {
+  title: string;
+  hint?: string;
+  /** Alias for `hint`. */
+  subtitle?: string;
+}) {
+  const detail = hint ?? subtitle;
   return (
     <div className="flex flex-col items-center justify-center gap-1 py-10 text-center">
       <p className="text-sm text-ink">{title}</p>
-      {hint && <p className="text-xs text-muted">{hint}</p>}
+      {detail && <p className="text-xs text-muted">{detail}</p>}
     </div>
   );
 }
@@ -131,18 +190,28 @@ export function ErrorBox({ message }: { message: string }) {
   );
 }
 
-export function Table({ head, children }: { head: string[]; children: ReactNode }) {
+/**
+ * Pass `head` and Table renders the header row and wraps children in a tbody.
+ * Omit it to supply your own `<thead>`/`<tbody>` as children.
+ */
+export function Table({ head, children }: { head?: string[]; children: ReactNode }) {
   return (
     <div className="overflow-x-auto">
       <table className="w-full text-sm">
-        <thead>
-          <tr className="border-b border-line text-left text-xs uppercase tracking-wide text-muted">
-            {head.map((h) => (
-              <th key={h} className="px-3 py-2 font-medium">{h}</th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>{children}</tbody>
+        {head ? (
+          <>
+            <thead>
+              <tr className="border-b border-line text-left text-xs uppercase tracking-wide text-muted">
+                {head.map((h) => (
+                  <th key={h} className="px-3 py-2 font-medium">{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>{children}</tbody>
+          </>
+        ) : (
+          children
+        )}
       </table>
     </div>
   );

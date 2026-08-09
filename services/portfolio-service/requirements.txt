@@ -1,3 +1,10 @@
--r ../../requirements-base.txt
-alembic==1.13.1
-psycopg2-binary==2.9.9
+# Extras for the Portfolio Service only.
+# The shared, pinned dependency set lives in requirements-base.txt at the repo
+# root and is installed alongside this file:
+#
+#   docker : RUN pip install -r requirements-base.txt -r service-requirements.txt
+#   local  : pip install -r requirements-base.txt -r services/portfolio-service/requirements.txt
+#
+# alembic and psycopg2-binary are already pinned in requirements-base.txt;
+# re-pinning them here at different versions made pip resolve two conflicting
+# constraints. No extra dependencies are needed.

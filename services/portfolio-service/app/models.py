@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import (
     BigInteger,
@@ -16,6 +16,19 @@ from sqlalchemy.orm import Mapped, mapped_column
 from common.db import Base
 
 
+def _utcnow() -> datetime:
+    """Python-side timestamp default.
+
+    `server_default` alone leaves the attribute unloaded on a newly inserted
+    row, so serialising that row triggers a lazy refresh — which in async
+    SQLAlchemy raises MissingGreenlet. Populating it client-side means the
+    object is complete the moment it is flushed, with no extra round trip.
+    The server_default stays as the guarantee for rows written outside the ORM.
+    """
+    return datetime.now(timezone.utc)
+
+
+
 class Holding(Base):
     __tablename__ = "holdings"
 
@@ -27,7 +40,7 @@ class Holding(Base):
     avg_cost: Mapped[float] = mapped_column(Numeric(18, 4), default=0, nullable=False)
     realized_pnl: Mapped[float] = mapped_column(Numeric(18, 4), default=0, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow, server_default=func.now()
     )
 
     __table_args__ = (
@@ -51,10 +64,10 @@ class ShareReservation(Base):
     released: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
     status: Mapped[str] = mapped_column(String(16), default="HELD", nullable=False)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
+        DateTime(timezone=True), default=_utcnow, server_default=func.now(), nullable=False
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow, server_default=func.now()
     )
 
 
@@ -82,5 +95,5 @@ class ProcessedEvent(Base):
     event_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
     event_type: Mapped[str] = mapped_column(String(64), nullable=True)
     handled_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
+        DateTime(timezone=True), default=_utcnow, server_default=func.now(), nullable=False
     )

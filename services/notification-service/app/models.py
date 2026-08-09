@@ -1,11 +1,24 @@
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import Boolean, DateTime, Index, String, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from common.db import Base
+
+
+def _utcnow() -> datetime:
+    """Python-side timestamp default.
+
+    `server_default` alone leaves the attribute unloaded on a newly inserted
+    row, so serialising that row triggers a lazy refresh — which in async
+    SQLAlchemy raises MissingGreenlet. Populating it client-side means the
+    object is complete the moment it is flushed, with no extra round trip.
+    The server_default stays as the guarantee for rows written outside the ORM.
+    """
+    return datetime.now(timezone.utc)
+
 
 # Notification types (also the values the frontend switches on for icons).
 ORDER_FILLED = "ORDER_FILLED"
@@ -29,7 +42,7 @@ class Notification(Base):
     reference_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     is_read: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=func.now()
+        DateTime(timezone=True), nullable=False, default=_utcnow, server_default=func.now()
     )
 
     __table_args__ = (Index("ix_notif_user_created", "user_id", "created_at"),)
@@ -47,5 +60,5 @@ class ProcessedEvent(Base):
     event_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
     event_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
     handled_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=func.now()
+        DateTime(timezone=True), nullable=False, default=_utcnow, server_default=func.now()
     )

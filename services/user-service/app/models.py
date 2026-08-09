@@ -1,11 +1,24 @@
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import Boolean, DateTime, String, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from common.db import Base
+
+
+def _utcnow() -> datetime:
+    """Python-side timestamp default.
+
+    `server_default` alone leaves the attribute unloaded on a newly inserted
+    row, so serialising that row triggers a lazy refresh — which in async
+    SQLAlchemy raises MissingGreenlet. Populating it client-side means the
+    object is complete the moment it is flushed, with no extra round trip.
+    The server_default stays as the guarantee for rows written outside the ORM.
+    """
+    return datetime.now(timezone.utc)
+
 
 MAX_EMAIL_LEN = 255
 MAX_USERNAME_LEN = 50
@@ -25,8 +38,8 @@ class User(Base):
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=func.now()
+        DateTime(timezone=True), nullable=False, default=_utcnow, server_default=func.now()
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+        DateTime(timezone=True), nullable=False, default=_utcnow, onupdate=_utcnow, server_default=func.now()
     )

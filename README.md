@@ -1,33 +1,69 @@
 # Mini Stock Exchange Platform
 
 A microservices-based paper-trading exchange. Users register, deposit virtual funds, watch live
-prices and candlestick charts, place limit/market orders, and have those orders **matched against
-each other** by a real price–time-priority matching engine — then see the fill reflected in their
-cash balance, holdings, P&L and notifications.
+prices and candlestick charts, place limit and market orders, and have those orders **matched
+against each other** by a real price–time-priority matching engine — with the fill then settled
+across cash, holdings, P&L and notifications.
 
 **Course:** SWE 4602 — Software Design & Architectures
 **Institution:** Islamic University of Technology, Department of CSE
 
-| # | Name | ID | Owns |
+| # | Name | ID | Built |
 |---|---|---|---|
-| 1 | Arham Ibrahim Khan | 220042160 | Notification Service · API Gateway · platform & integration |
-| 2 | Arham Apon Utsho | 220042153 | User Service · Account Service |
-| 3 | Abidur Rahman Asif | 220042152 | Order Service · Matching Engine |
-| 4 | Mustain Billah Taj | 220042166 | Market Data Service · Portfolio Service |
+| 1 | Arham Ibrahim Khan | 220042160 | Notification Service · API Gateway · infrastructure & integration |
+| 2 | Arham Apon Utsho | 220042153 | User Service · Account Service · auth & wallet UI |
+| 3 | Abidur Rahman Asif | 220042152 | Order Service · Matching Engine · trading UI |
+| 4 | Mustain Billah Taj | 220042166 | Market Data Service · Portfolio Service · charts & portfolio UI |
 
-> **Status: in active development.** The platform layer is in place — shared contract
-> (`libs/common/`), frontend shell, Docker Compose stack with PostgreSQL streaming replication,
-> the **API Gateway** and the **Notification Service**. The remaining five services are being built
-> in parallel by their owners.
+---
 
-## Documentation
+## Quick start
 
-| Document | Contents |
+Requires Docker Desktop with **8 GB** of memory allocated.
+
+```bash
+git clone https://github.com/arhamkhan160/Mini-Stock-Exchange-Platform.git
+```
+
+```bash
+cd Mini-Stock-Exchange-Platform && cp .env.example .env
+```
+
+```bash
+docker compose up -d --build
+```
+
+Then fill the exchange with market history and live trading activity:
+
+```bash
+python infra/seed/seed_market_data.py && python infra/seed/seed_demo_data.py
+```
+
+Open **http://localhost:3000** and sign in:
+
+| Account | Password |
 |---|---|
-| [docs/architecture.md](docs/architecture.md) | System diagram, why each service is separate, every architectural pattern and its trade-offs |
-| [docs/use-cases.md](docs/use-cases.md) | Use-case diagram and per-use-case flows, including alternates |
-| [docs/sequence-place-order.md](docs/sequence-place-order.md) | The place-order saga, its compensating actions, and two-phase cancellation |
-| [docs/events.md](docs/events.md) | Event envelope, exact payloads, queue bindings, and the rules every consumer follows |
+| `demo@mse.local` | `DemoPassw0rd!` |
+| `trader00@mse.local` … `trader13@mse.local` | `SeedPassw0rd!` |
+
+The `trader*` accounts hold positions and open orders, so the portfolio, orders and wallet pages
+have real data in them. `demo` starts flat, which is the better account to demonstrate placing a
+first order.
+
+| Surface | URL |
+|---|---|
+| Web app | http://localhost:3000 |
+| API Gateway | http://localhost:8000 |
+| Swagger per service | http://localhost:8001/docs … http://localhost:8007/docs |
+| RabbitMQ management | http://localhost:15672 |
+
+Every published port binds to `127.0.0.1`, so the stack is reachable only from your machine. Redis
+has no password and RabbitMQ uses the credentials in `.env`; on a shared network an unbound port
+would expose both. Drop the `127.0.0.1:` prefix in `docker-compose.yml` only if you deliberately
+need remote access.
+
+The credentials in `.env.example` are development defaults created by the containers on first boot.
+Production would inject them from a secrets manager.
 
 ---
 
@@ -57,54 +93,112 @@ graph TB
   GW <--> R
 ```
 
-### The seven services
+Solid arrows are synchronous HTTP; dotted arrows are asynchronous events.
 
-| Service | Port | Responsibility |
+| Service | Port | Owns |
 |---|---|---|
-| **User** | 8001 | Registration, login, JWT issuing, profile management |
-| **Account** | 8002 | Virtual cash, deposits, buying-power checks, Redis-locked funds reservations, settlement |
-| **Order** | 8003 | Order intake and validation, full lifecycle, and the place-order **saga** with compensating actions |
-| **Matching Engine** | 8004 | In-memory limit order book per symbol, price–time priority, emits trade executions |
-| **Market Data** | 8005 | Consumes trades, aggregates 1m/5m OHLC candles, serves chart history from a **read replica**, fans out live ticks over WebSocket |
-| **Portfolio** | 8006 | Holdings, average cost, realized/unrealized P&L as a CQRS projection; owns share reservations for SELL orders |
-| **Notification** | 8007 | Asynchronous fill / cancellation / rejection alerts (mock email + in-app) |
+| **User** | 8001 | Identities, password hashes, JWT issuing |
+| **Account** | 8002 | Virtual cash, funds reservations, settlement ledger |
+| **Order** | 8003 | Order lifecycle and the place-order saga |
+| **Matching Engine** | 8004 | In-memory order books, price–time priority *(no database, by design)* |
+| **Market Data** | 8005 | Trades, OHLC candles, live ticks — primary + read replica |
+| **Portfolio** | 8006 | Holdings, average cost, P&L, share reservations |
+| **Notification** | 8007 | Fill / cancellation / rejection alerts |
 
-Supporting: **API Gateway** (single entry point, JWT validation, Redis rate limiting, WebSocket proxy),
-**RabbitMQ** (event backbone), **Redis** (distributed locks, price cache, Pub/Sub fan-out),
-**PostgreSQL** (one database per service; the Market Data database runs primary + streaming replica).
-
-### Architectural patterns demonstrated
-
-- API Gateway with cross-cutting concerns (authentication, rate limiting)
-- Synchronous inter-service communication — REST over HTTP via `httpx`
-- Asynchronous, event-driven communication — RabbitMQ topic exchange
-- Database-per-Service (independent data ownership, no shared schema)
-- **Master–slave (primary–replica) PostgreSQL streaming replication** on the read-heavy market-data path
-- Distributed locking and caching with Redis
-- **Saga** coordination with compensating actions for the multi-service "place order" transaction
-- CQRS-style read projection (Portfolio) updated asynchronously from trade events
-- Service discovery via Docker Compose DNS
+Full reasoning for each boundary is in [docs/architecture.md](docs/architecture.md).
 
 ---
 
-## Tech stack
+## How a trade flows
 
-| Layer | Technology |
+1. **Register / login** — Frontend → Gateway → User Service, which returns a JWT.
+2. **Browse** — candle history from the **read replica**, live ticks over a WebSocket.
+3. **Place a limit buy** — Frontend → Gateway → Order Service.
+4. Order Service calls Account Service, which takes a **Redis lock** on the balance, verifies buying
+   power and **reserves** the funds. A sell reserves *shares* in the Portfolio Service instead.
+5. The order is persisted `NEW` and **`order.accepted`** is published.
+6. The Matching Engine matches it by price–time priority, or rests it, and publishes
+   **`trade.executed`** per fill.
+7. Consumers react: Order updates status, Account settles cash both ways, Portfolio updates holdings
+   and P&L, Market Data writes the trade, updates candles and broadcasts a tick.
+8. Notification Service sends the alert; the UI updates live over its WebSocket.
+9. **If any step fails**, compensating actions release the reserved funds or shares and the order is
+   marked `REJECTED`.
+
+Trades execute at the **resting order's price**, so the aggressor receives any price improvement —
+a buy limit of 200.00 against a resting ask of 195.70 fills at 195.70, and the over-reservation is
+returned. Cancellation is two-phase: only the book knows whether an order was still resting, so the
+Matching Engine publishes the authoritative `order.cancelled`.
+
+See [docs/sequence-place-order.md](docs/sequence-place-order.md) for the saga and its failure paths.
+
+---
+
+## Architectural patterns
+
+| Pattern | Where |
 |---|---|
-| Frontend | Next.js 14 (App Router), React 18, TypeScript, Tailwind, `lightweight-charts` 4.2 |
-| Backend | FastAPI (Python 3.11) — one application per microservice |
-| API Gateway | FastAPI reverse proxy (`httpx`) with JWT validation and Redis-backed rate limiting |
-| Service discovery | Docker Compose DNS (container names) |
-| Sync communication | REST via `httpx` |
-| Async communication | RabbitMQ (topic exchange, durable queues, dead-letter exchange) |
-| Database | PostgreSQL 16 — one database per service |
-| Replication | PostgreSQL streaming replication (primary for trade ingestion, replica for chart/history reads) |
-| Cache / locks / pub-sub | Redis 7 |
-| Real-time | WebSockets (native FastAPI), proxied through the gateway |
-| Auth | JWT (HS256), OAuth2 password flow |
-| ORM / migrations | SQLAlchemy 2.0 (async) + Alembic |
-| Containers | Docker, Docker Compose |
-| API docs | Swagger / OpenAPI (auto-generated by FastAPI) |
+| API Gateway with cross-cutting concerns | [`services/gateway/`](services/gateway/) — routing, JWT, rate limiting, WS proxy |
+| Synchronous inter-service REST | `Order → Account`, `Order → Portfolio` via [`libs/common/http_client.py`](libs/common/http_client.py) |
+| Asynchronous event-driven messaging | RabbitMQ topic exchange — [`libs/common/events.py`](libs/common/events.py), [docs/events.md](docs/events.md) |
+| Database per service | 7 PostgreSQL instances, one Alembic history each |
+| **Master–slave replication** | [`infra/postgres/`](infra/postgres/) — Market Data writes primary, reads replica |
+| Saga with compensating actions | Order Service place-order flow |
+| CQRS read projection | Portfolio Service, built from `trade.executed` |
+| Distributed locking | Redis `SET NX PX` + Lua compare-and-delete release |
+| Caching & Pub/Sub fan-out | `md:last_price:*`, channel `md:ticks` |
+| Order matching | In-memory book per symbol, price–time priority, self-trade prevention |
+| Real-time delivery | WebSockets, proxied through the gateway |
+| Service discovery | Docker Compose DNS on the `mse-net` network |
+| Circuit breaker & bulkhead | [`services/gateway/app/proxy.py`](services/gateway/app/proxy.py) |
+
+### Verifying the replication
+
+```bash
+docker compose exec postgres-market-primary psql -U mse -d market_db -c "SELECT client_addr, state, sync_state FROM pg_stat_replication;"
+```
+
+```bash
+docker compose exec postgres-market-replica psql -U mse -d market_db -c "SELECT pg_is_in_recovery();"
+```
+
+Expect one row in `streaming` state, and `t`. The Market Data service logs `pg_is_in_recovery` for
+its read engine at startup, and writing to the replica correctly fails with
+`cannot execute INSERT in a read-only transaction`.
+
+---
+
+## Testing
+
+Everything runs without a test framework — plain asserts, so there is nothing extra to install.
+
+```bash
+python tests/run_all.py
+```
+
+| Suite | Needs a running stack | Covers |
+|---|---|---|
+| `tests/test_contract.py` | no | `libs/common`: money rules, symbols, event envelope, queue uniqueness, JWT |
+| `tests/test_routes.py` | no | All 23 gateway routes in-process: upstream, path rewrite, auth, rate limits |
+| `tests/test_live_routes.py` | **yes** | Real HTTP + the full event path: RabbitMQ → consumer → Postgres → gateway |
+| `scripts/smoke_test.py` | **yes** | End-to-end business flow: register → deposit → trade → settle → notify |
+| `scripts/verify_stack.py` | **yes** | Health, JWT agreement across containers, queues, replication, frontend |
+| `services/*/selfcheck.py` | mixed | Per-service logic and edge cases |
+
+```bash
+python scripts/verify_stack.py
+```
+
+```bash
+python scripts/smoke_test.py
+```
+
+⚠️ The **User** and **Account** self-checks delete every row in their tables. They refuse to run
+unless you opt in explicitly, so they cannot wipe seeded data by accident:
+
+```bash
+SELFCHECK_DESTRUCTIVE=1 python services/account-service/selfcheck.py
+```
 
 ---
 
@@ -112,150 +206,61 @@ Supporting: **API Gateway** (single entry point, JWT validation, Redis rate limi
 
 ```
 .
-├── libs/common/                  # SHARED CONTRACT — frozen. Events, JWT, money, Redis, broker, DB
-│   ├── config.py                 #   environment settings (identical var names everywhere)
-│   ├── security.py               #   JWT create/decode, get_current_user, internal-key guard
-│   ├── money.py                  #   Decimal 4dp rules — no floats, ever
-│   ├── symbols.py                #   the 8 tradable symbols + seed prices
-│   ├── events.py                 #   event catalog, envelope, Broker (retry + dead-letter)
-│   ├── redis_client.py           #   distributed lock (Lua CAS), idempotency guard, price cache
-│   ├── db.py                     #   async engine/session helpers + Alembic sync-URL conversion
-│   ├── http_client.py            #   service-to-service calls with bounded retry
-│   └── logging_setup.py          #   single-line JSON logging
-│
-├── frontend/                     # Next.js app — shell is committed, pages are per-owner
-│   ├── lib/                      #   api client, auth context, WebSocket client, formatters, types
-│   ├── components/               #   design system (ui.tsx), Navbar, Toast, Protected, …
-│   └── app/                      #   routes
-│
-├── services/                     # one folder per microservice (added by each owner)
-├── infra/                        # Postgres replication scripts, seeders, market-maker bot
-├── docs/                         # architecture, use cases, sequence diagrams, event catalog
-├── scripts/                      # end-to-end smoke test
-├── requirements-base.txt         # pinned Python dependency set shared by every service
-└── docker-compose.yml            # the whole stack
+├── libs/common/          shared contract: events + broker, JWT, money rules,
+│                         Redis lock/idempotency, async DB helpers, HTTP client
+├── services/
+│   ├── gateway/          API gateway (no database)
+│   ├── user-service/     account-service/     order-service/
+│   ├── matching-engine/  market-data-service/ portfolio-service/
+│   └── notification-service/
+├── frontend/             Next.js 14 app (App Router, Tailwind, lightweight-charts)
+├── infra/
+│   ├── postgres/         streaming replication init scripts
+│   └── seed/             candle history, demo trading data, market-maker bot
+├── tests/                contract and route suites
+├── scripts/              smoke test, stack verifier
+├── docs/                 architecture, use cases, sequences, event catalog
+└── docker-compose.yml    18 containers
 ```
 
 ---
 
-## Getting started
+## Conventions
 
-> Requires Docker Desktop with **at least 8 GB** of memory allocated.
+These are enforced across every service; breaking one is the fastest way to produce wrong numbers.
 
-```bash
-git clone https://github.com/arhamkhan160/Mini-Stock-Exchange-Platform.git
-cd Mini-Stock-Exchange-Platform
-cp .env.example .env
-docker compose up -d --build
-```
+- **Money** is `Decimal`, 4 decimal places, `ROUND_HALF_UP`, stored `NUMERIC(18,4)` and transported
+  as a JSON **string**. Never a float. The one exception is `/market/candles`, which returns numbers
+  because the charting library requires them.
+- **Quantity** is a positive integer — whole shares only.
+- **Every event handler is idempotent**, and idempotency is **database-first**: the
+  `processed_events` primary key is the authority, written in the same transaction as the work.
+  Redis is only a fast-path cache and is set *after* the commit, so a crash mid-handler can never
+  make unprocessed work look processed.
+- **A failing handler never blocks its queue** — the message goes to a `<queue>.retry` companion
+  with a TTL and is dead-lettered after 5 attempts.
+- **`JWT_SECRET` is identical in every container**, and each service logs a fingerprint of it at
+  startup so a mismatch shows up in the logs instead of as unexplained 401s.
 
-Then seed market history and start the market-maker bot so the book and charts are alive:
+## Documentation
 
-```bash
-python infra/seed/seed_market_data.py && python infra/seed/market_maker.py
-```
-
-Verify the whole flow end to end:
-
-```bash
-python scripts/smoke_test.py
-```
-
-| What | Where |
+| Document | Contents |
 |---|---|
-| Web app | http://localhost:3000 |
-| API Gateway | http://localhost:8000 |
-| Swagger (per service) | http://localhost:8001/docs … http://localhost:8007/docs |
-| RabbitMQ management | http://localhost:15672 (guest / guest) |
+| [docs/architecture.md](docs/architecture.md) | Service boundaries, patterns and trade-offs |
+| [docs/use-cases.md](docs/use-cases.md) | Use-case diagram and per-case flows |
+| [docs/sequence-place-order.md](docs/sequence-place-order.md) | The saga, compensations, two-phase cancel |
+| [docs/events.md](docs/events.md) | Event envelope, payloads, queues, consumer rules |
+| `services/*/SERVICE_NOTES.md` | Per-service endpoints, edge cases and known limits |
 
-Every published port is bound to `127.0.0.1`, so the stack is reachable from your machine only.
-Redis runs without a password and RabbitMQ uses its default credentials — on a shared network an
-unbound port would expose both. Drop the `127.0.0.1:` prefix on a port in `docker-compose.yml` if
-you deliberately need to reach it from another machine.
+## Known limitations
 
-The credentials in `.env.example` are development defaults, created by the containers themselves on
-first boot. Production would inject them from a secrets manager instead.
-
-Verify the master–slave replication:
-
-```bash
-docker compose exec postgres-market-primary psql -U mse -d market_db -c "SELECT client_addr,state,sync_state FROM pg_stat_replication;"
-```
-
-```bash
-docker compose exec postgres-market-replica psql -U mse -d market_db -c "SELECT pg_is_in_recovery();"
-```
-
-Expect one row in `streaming` state, and `t`.
-
----
-
-## How a trade flows through the system
-
-1. **Register / login** — Frontend → Gateway → User Service, which returns a JWT.
-2. **Browse** — Frontend → Gateway → Market Data: candle history from the **read replica**, live ticks over WebSocket.
-3. **Place a limit buy** — Frontend → Gateway → Order Service.
-4. Order Service synchronously calls Account Service, which takes a **Redis lock** on the user's balance, verifies buying power and **reserves** the funds. (A sell instead reserves *shares* in the Portfolio Service.)
-5. Order Service persists the order as `NEW` and publishes **`order.accepted`**.
-6. The Matching Engine matches it against the opposite side of the book by price–time priority — or rests it — and publishes **`trade.executed`** for each fill.
-7. Consumers react: Order Service updates the status, Account Service settles cash between both parties, Portfolio Service updates both users' holdings and P&L, Market Data updates candles and broadcasts the new tick.
-8. Notification Service sends the fill alert; the frontend reflects the trade live over its WebSocket subscription.
-9. **If any step fails**, compensating actions run — the reserved funds or shares are released and the order is marked `REJECTED`.
-
-Cancellation is two-phase: the Order Service publishes `order.cancel_requested`, and the **Matching Engine** publishes the authoritative `order.cancelled` once the order is actually removed from the book. This is a deliberate refinement of the original design — only the book knows whether the order was still resting, so releasing funds any earlier would race against a simultaneous fill.
-
----
-
-## Proposal requirement → implementation
-
-| Requirement | Where it lives |
-|---|---|
-| API Gateway routing and cross-cutting concerns | [`services/gateway/app/routing.py`](services/gateway/app/routing.py), [`auth.py`](services/gateway/app/auth.py), [`ratelimit.py`](services/gateway/app/ratelimit.py) |
-| JWT authentication, OAuth2 password flow | [`libs/common/security.py`](libs/common/security.py) + User Service |
-| Rate limiting (Redis) | [`services/gateway/app/ratelimit.py`](services/gateway/app/ratelimit.py) — 30/min on order placement, fails open |
-| Synchronous inter-service REST | [`libs/common/http_client.py`](libs/common/http_client.py); `Order → Account`, `Order → Portfolio` |
-| Asynchronous event-driven communication | [`libs/common/events.py`](libs/common/events.py), [`docs/events.md`](docs/events.md) |
-| Database per service | 7 PostgreSQL containers in [`docker-compose.yml`](docker-compose.yml); one Alembic history per service |
-| **Master–slave replication** | [`infra/postgres/primary/init-replication.sh`](infra/postgres/primary/init-replication.sh), [`replica/setup-replica.sh`](infra/postgres/replica/setup-replica.sh); read/write split in the Market Data service |
-| Distributed locking (Redis) | [`libs/common/redis_client.py`](libs/common/redis_client.py) — `SET NX PX` + Lua compare-and-delete release |
-| Caching and Pub/Sub tick fan-out | `md:last_price:*`, `md:quote:*`, channel `md:ticks` |
-| Saga with compensating actions | Order Service place-order flow; [`docs/sequence-place-order.md`](docs/sequence-place-order.md) |
-| CQRS read projection | Portfolio Service, built from `trade.executed` |
-| Order matching (price–time priority) | Matching Engine, in-memory book per symbol |
-| WebSockets for live prices | Market Data `/ws/market`, bridged by [`services/gateway/app/ws_proxy.py`](services/gateway/app/ws_proxy.py) |
-| Service discovery | Docker Compose DNS on the `mse-net` network |
-| Notifications (mock email / in-app) | [`services/notification-service/`](services/notification-service/) |
-| SQLAlchemy + Alembic | [`libs/common/db.py`](libs/common/db.py); per-service `alembic/` |
-| Swagger / OpenAPI | FastAPI `/docs` on every service |
-| Containerisation | [`docker-compose.yml`](docker-compose.yml), one Dockerfile per service |
-
-## Contributing (team)
-
-Each member works in their own folders on their own branch, against a frozen shared contract, so
-nobody is blocked and merges stay conflict-free.
-
-| Owner | Services | Branch |
-|---|---|---|
-| Arham Ibrahim Khan | Notification, API Gateway, platform | `main` |
-| Arham Apon Utsho | User, Account | `feat/team-b-identity` |
-| Abidur Rahman Asif | Order, Matching Engine | `feat/team-c-trading` |
-| Mustain Billah Taj | Market Data, Portfolio | `feat/team-d-market-portfolio` |
-
-Detailed per-owner work packages are distributed to the team directly and are **not tracked in this
-repository**. Each one carries the same contract section: ports, money rules, JWT claims, gateway
-routes, exact event payloads, Redis keys, internal REST endpoints, Docker/Alembic templates,
-frontend page ownership, and the merge protocol. The authoritative machine-readable version of that
-contract is the code in `libs/common/`.
-
-**Rules**
-
-- Never edit `libs/common/`, the frontend shell, `docker-compose.yml`, `.env`, or another owner's folder — message A instead.
-- Money is `Decimal` with 4 decimal places and crosses the wire as a **string**. Never a float. (The only exception is `/api/market/candles`, which returns numbers because the charting library requires them.)
-- Quantities are positive integers — whole shares only.
-- Every event handler is idempotent: guard on `event_id` before doing anything.
-- `*.sh` files must keep LF line endings (enforced by `.gitattributes`) or Linux containers refuse to start.
-
----
+- The order book is in memory, so a matching-engine restart loses resting orders; it rebuilds from
+  the Order Service's open orders on boot.
+- Replica lag means a chart read immediately after a trade can miss the newest candle. The frontend
+  also applies the live tick, so this is not visible to the user.
+- `processed_events` grows without bound; production would prune old rows.
+- The gateway rate-limit window is fixed rather than sliding, so a burst straddling a minute
+  boundary can briefly allow up to twice the limit.
 
 ## License
 

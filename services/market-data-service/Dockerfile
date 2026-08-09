@@ -3,7 +3,7 @@ WORKDIR /app
 ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=/app:/app/libs
 COPY requirements-base.txt ./
 COPY services/market-data-service/requirements.txt ./service-requirements.txt
-RUN pip install --no-cache-dir -r service-requirements.txt
+RUN pip install --no-cache-dir -r requirements-base.txt -r service-requirements.txt
 COPY libs /app/libs
 COPY services/market-data-service/app /app/app
 COPY services/market-data-service/alembic.ini /app/alembic.ini

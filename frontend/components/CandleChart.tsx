@@ -105,8 +105,26 @@ export default function CandleChart({ symbol, interval }: { symbol: string; inte
     return unsub;
   }, [symbol, interval, empty, loading]);
 
-  if (loading) return <div className="h-[420px] w-full flex items-center justify-center border border-[#1f2637] rounded-xl"><Spinner /></div>;
-  if (empty) return <div className="h-[420px] w-full border border-[#1f2637] rounded-xl flex items-center justify-center"><Empty title="No trading activity yet" subtitle="There is no historical data for this symbol." /></div>;
-
-  return <div ref={ref} className="h-[420px] w-full border border-[#1f2637] rounded-xl overflow-hidden" />;
+  // The chart container must ALWAYS be mounted. Returning a spinner instead of
+  // it left `ref.current` null, so the effect above bailed out on its first
+  // line, never called loadData(), and never cleared `loading` — the chart sat
+  // on "Loading…" forever. States overlay the container instead of replacing it.
+  return (
+    <div className="relative h-[420px] w-full overflow-hidden rounded-xl border border-[#1f2637]">
+      <div ref={ref} className="absolute inset-0" />
+      {loading && (
+        <div className="absolute inset-0 flex items-center justify-center bg-panel/80">
+          <Spinner label="Loading chart…" />
+        </div>
+      )}
+      {!loading && empty && (
+        <div className="absolute inset-0 flex items-center justify-center bg-panel/80">
+          <Empty
+            title="No trading activity yet"
+            subtitle="There is no historical data for this symbol."
+          />
+        </div>
+      )}
+    </div>
+  );
 }

@@ -17,7 +17,6 @@ SUITES = [
     ("contract  (libs/common)", ROOT / "tests" / "test_contract.py"),
     ("routes    (gateway + notification)", ROOT / "tests" / "test_routes.py"),
 ]
-##dkdgn
 NEEDS_INFRA = [
     (
         "gateway selfcheck",

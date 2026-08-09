@@ -7,7 +7,8 @@ from datetime import datetime, timezone
 from sqlalchemy import func
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
-from common.redis_client import redis, seen_event
+from common.redis_client import seen_event
+from .redis_conn import redis
 from common.money import to_money, money_str
 from common.symbols import normalize_symbol
 from app.models import Trade, Candle

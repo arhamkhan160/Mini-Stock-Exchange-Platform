@@ -6,16 +6,20 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Request
-from sqlalchemy import select, desc
+from sqlalchemy import select, desc, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import OperationalError
 
 from common.config import settings
 from common.db import make_engine, make_sessionmaker
-from common.events import Broker
-from common.redis_client import redis, init_redis, close_redis
+from common.events import (
+    Q_MARKETDATA_TRADE_EXECUTED,
+    TRADE_EXECUTED,
+    Broker,
+)
+from .redis_conn import redis
 from common.symbols import SYMBOLS, SEED_PRICES, normalize_symbol
-from common.money import money_str
+from common.money import money_str, to_money
 
 from app.models import Symbol, Trade, Candle
 from app.ws import MANAGER, Connection
@@ -29,7 +33,7 @@ read_engine = make_engine(replica_url)
 WriteSession = make_sessionmaker(write_engine)
 ReadSession = make_sessionmaker(read_engine)
 
-broker = Broker(settings.RABBITMQ_URL)
+broker = Broker(settings.RABBITMQ_URL, settings.SERVICE_NAME)
 
 async def tick_pump():
     while True:
@@ -84,7 +88,6 @@ async def warmup_cache():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    await init_redis(settings.REDIS_URL)
     await broker.connect()
     
     # Verify replica
@@ -103,13 +106,13 @@ async def lifespan(app: FastAPI):
     async def _handle_trade(env):
         await handle_trade(env, WriteSession)
         
-    await broker.consume("trade.executed", "q.marketdata.trade_executed", _handle_trade)
+    await broker.consume(Q_MARKETDATA_TRADE_EXECUTED, [TRADE_EXECUTED], _handle_trade)
 
     yield
     
     tick_task.cancel()
     await broker.close()
-    await close_redis()
+    await redis.aclose()
     await write_engine.dispose()
     await read_engine.dispose()
 
@@ -135,42 +138,84 @@ async def ready():
         raise HTTPException(status_code=503, detail=str(e))
 
 from sqlalchemy.sql import func
+async def _daily_stats() -> dict[str, dict]:
+    """Opening price and traded volume for every symbol over the last 24h.
+
+    Two grouped queries for the whole board rather than two per symbol, and
+    served from the read replica like every other history query.
+    """
+    opens_sql = text(
+        """
+        SELECT DISTINCT ON (symbol) symbol, open
+        FROM candles
+        WHERE interval = '1m' AND bucket_start >= now() - interval '24 hours'
+        ORDER BY symbol, bucket_start ASC
+        """
+    )
+    volume_sql = text(
+        """
+        SELECT symbol, COALESCE(SUM(volume), 0) AS volume
+        FROM candles
+        WHERE interval = '1m' AND bucket_start >= now() - interval '24 hours'
+        GROUP BY symbol
+        """
+    )
+
+    async def fetch(session):
+        opens = {row.symbol: row.open for row in (await session.execute(opens_sql)).all()}
+        volumes = {row.symbol: int(row.volume) for row in (await session.execute(volume_sql)).all()}
+        return opens, volumes
+
+    try:
+        async with ReadSession() as rs:
+            opens, volumes = await fetch(rs)
+    except OperationalError as exc:
+        log.warning(f"Replica read failed for daily stats, retrying on primary: {exc}")
+        async with WriteSession() as ws:
+            opens, volumes = await fetch(ws)
+
+    return {
+        sym: {"open": opens.get(sym), "volume": volumes.get(sym, 0)}
+        for sym in SYMBOLS
+    }
+
+
 @app.get("/market/symbols")
 async def get_market_symbols():
     keys = [f"md:last_price:{s}" for s in SYMBOLS]
     prices = await redis.mget(*keys)
-    
-    # change vs close 24h ago
-    now = datetime.now(timezone.utc)
-    day_ago = now.timestamp() - 86400
-    
+
+    try:
+        stats = await _daily_stats()
+    except Exception:
+        # The board must still render if the history query fails.
+        log.exception("could not compute 24h stats")
+        stats = {}
+
     results = []
     for i, (sym, name) in enumerate(SYMBOLS.items()):
-        p = prices[i]
-        if not p:
-            p = SEED_PRICES[sym]
-            
-        # Get 24h ago close and volume from DB
-        # If no history, change=0, pct=0
-        change = "0.0000"
-        change_pct = 0.0
-        volume_24h = 0
-        try:
-            async with ReadSession() as rs:
-                # To keep it simple, we could just query the sum of volume for the last 24h
-                # and the close price of the first candle in the last 24h
-                # Wait, simpler: we just need a rough 24h change. 
-                pass 
-        except Exception:
-            pass
-            
+        last_raw = prices[i] or SEED_PRICES[sym]
+        last = to_money(last_raw)
+
+        entry = stats.get(sym) or {}
+        opened = entry.get("open")
+        if opened is not None and to_money(opened) > 0:
+            opened = to_money(opened)
+            change = to_money(last - opened)
+            change_pct = float(change / opened * 100)
+        else:
+            # No history yet — report a flat market rather than null or a
+            # divide-by-zero.
+            change = to_money(0)
+            change_pct = 0.0
+
         results.append({
             "symbol": sym,
             "name": name,
-            "last_price": p,
-            "change": change,
-            "change_pct": change_pct,
-            "volume_24h": volume_24h
+            "last_price": money_str(last),
+            "change": money_str(change),
+            "change_pct": round(change_pct, 2),
+            "volume_24h": entry.get("volume", 0),
         })
     return results
 
@@ -238,52 +283,59 @@ async def get_market_candles(symbol: str, interval: str = "1m", limit: int = 300
         return []
         
     candles = sorted(candles, key=lambda c: c.bucket_start)
-    
-    # Gap fill
-    filled = []
-    minutes = 1 if interval == "1m" else 5
-    
+
+    # ---- gap fill ---------------------------------------------------------
+    # A minute with no trades has no row, and a chart with holes reads as
+    # broken, so quiet buckets are carried forward flat at the previous close.
+    step = (1 if interval == "1m" else 5) * 60
+    # A long quiet stretch must not expand into millions of synthetic points.
+    MAX_FILL_PER_GAP = 1000
+
+    filled: list[dict] = []
     prev_close = float(candles[0].open)
-    # Actually we just fill from the first candle to the last candle
-    # but the requirement says "Between first and last with previous close"
-    
-    for i in range(len(candles)):
-        c = candles[i]
+
+    for c in candles:
         curr_ts = int(c.bucket_start.timestamp())
-        
-        if len(filled) > 0:
+
+        if filled:
             last_ts = filled[-1]["time"]
-            step = minutes * 60
-            while last_ts + step < curr_ts and len(filled) < limit:
+            produced = 0
+            while last_ts + step < curr_ts and produced < MAX_FILL_PER_GAP:
                 last_ts += step
+                produced += 1
                 filled.append({
                     "time": last_ts,
                     "open": prev_close,
                     "high": prev_close,
                     "low": prev_close,
                     "close": prev_close,
-                    "volume": 0
+                    "volume": 0,
                 })
-                
-        if len(filled) < limit:
-            filled.append({
-                "time": curr_ts,
-                "open": float(c.open),
-                "high": float(c.high),
-                "low": float(c.low),
-                "close": float(c.close),
-                "volume": c.volume
-            })
-            prev_close = float(c.close)
-            
-    # Deduplicate just in case
+
+        filled.append({
+            "time": curr_ts,
+            "open": float(c.open),
+            "high": float(c.high),
+            "low": float(c.low),
+            "close": float(c.close),
+            "volume": c.volume,
+        })
+        prev_close = float(c.close)
+
+    # Trim from the OLD end. Capping while building dropped the newest candles,
+    # which are the ones a live chart actually needs — the price would freeze a
+    # bucket behind and never show the latest trade.
+    filled = filled[-limit:]
+
+    # Deduplicate, keeping order: lightweight-charts asserts on repeated or
+    # out-of-order timestamps.
     seen = set()
     final = []
     for f in filled:
         if f["time"] not in seen:
             seen.add(f["time"])
             final.append(f)
-            
+
     return final
 
 @app.get("/market/trades/{symbol}")
