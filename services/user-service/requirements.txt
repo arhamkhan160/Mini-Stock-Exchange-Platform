@@ -1,0 +1,9 @@
+# Extras for the User Service only.
+# The shared, pinned dependency set lives in requirements-base.txt at the repo
+# root and is installed alongside this file:
+#
+#   docker : RUN pip install -r requirements-base.txt -r service-requirements.txt
+#   local  : pip install -r requirements-base.txt -r services/user-service/requirements.txt
+#
+# email-validator backs pydantic's EmailStr (used by UserBase.email).
+email-validator==2.2.0

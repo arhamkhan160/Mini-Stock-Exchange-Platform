@@ -1,0 +1,8 @@
+# Extras for the Account Service only.
+# The shared, pinned dependency set lives in requirements-base.txt at the repo
+# root and is installed alongside this file:
+#
+#   docker : RUN pip install -r requirements-base.txt -r service-requirements.txt
+#   local  : pip install -r requirements-base.txt -r services/account-service/requirements.txt
+#
+# (No extra dependencies needed.)

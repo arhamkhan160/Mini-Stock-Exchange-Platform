@@ -1,0 +1,24 @@
+# Local dependencies for developing the Account Service on its own.
+#   docker compose -f docker-compose.dev.yml up -d
+#   (from the repo root, PowerShell)
+#   $env:PYTHONPATH=".;./libs"
+#   $env:DATABASE_URL="postgresql+asyncpg://mse:mse_pw@localhost:5434/account_db"
+#   $env:REDIS_URL="redis://localhost:6379/0"
+#   $env:SERVICE_PORT="8002"
+#   uvicorn app.main:app --reload --port 8002
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: mse
+      POSTGRES_PASSWORD: mse_pw
+      POSTGRES_DB: account_db
+    ports: ["5434:5432"]
+
+  redis:
+    image: redis:7-alpine
+    ports: ["6379:6379"]
+
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    ports: ["5672:5672", "15672:15672"]
