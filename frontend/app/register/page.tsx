@@ -8,14 +8,16 @@ import { useToast } from "@/components/Toast";
 import { Button, Card, ErrorBox, Input } from "@/components/ui";
 import { ApiError } from "@/lib/api";
 
-const USERNAME_RE = /^[a-zA-Z0-9_]{3,32}$/;
+const USERNAME_RE = /^[a-zA-Z0-9_]{3,30}$/;
+const HAS_LETTER = /[A-Za-z]/;
+const HAS_DIGIT = /\d/;
 
 export default function RegisterPage() {
   const router = useRouter();
   const { register } = useAuth();
   const { push } = useToast();
 
-  const [form, setForm] = useState({ username: "", email: "", password: "", full_name: "" });
+  const [form, setForm] = useState({ username: "", email: "", password: "", confirm: "", full_name: "" });
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -24,8 +26,12 @@ export default function RegisterPage() {
   }
 
   function validate(): string | null {
-    if (!USERNAME_RE.test(form.username)) return "Username must be 3-32 characters: letters, digits, underscore";
+    if (!USERNAME_RE.test(form.username)) return "Username must be 3-30 characters: letters, digits, underscore";
     if (form.password.length < 8) return "Password must be at least 8 characters";
+    if (!HAS_LETTER.test(form.password) || !HAS_DIGIT.test(form.password)) {
+      return "Password must contain at least one letter and one digit";
+    }
+    if (form.password !== form.confirm) return "Passwords do not match";
     return null;
   }
 
@@ -87,7 +93,15 @@ export default function RegisterPage() {
             required
             value={form.password}
             onChange={(e) => set("password", e.target.value)}
-            placeholder="At least 8 characters"
+            placeholder="At least 8 characters, one letter and one digit"
+          />
+          <Input
+            label="Confirm password"
+            type="password"
+            required
+            value={form.confirm}
+            onChange={(e) => set("confirm", e.target.value)}
+            placeholder="Re-enter your password"
           />
           <Button type="submit" loading={loading} className="w-full">
             Create account

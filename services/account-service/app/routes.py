@@ -1,24 +1,22 @@
 import logging
 import uuid
-from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from common.money import to_money
-from common.redis_client import LockTimeout, distributed_lock
 from common.security import CurrentUser, get_current_user, require_internal_key
 
 from .deps import get_session, redis
-from .models import DEPOSIT, HOLD, RELEASE, Account, Reservation, Transaction
-from .repo import get_or_create_account
+from .locking import FundsLockUnavailable, funds_lock
+from .models import DEPOSIT, HELD, HOLD, RELEASE, Account, Reservation, Transaction
+from .repo import get_or_create_account, release_remaining
 from .schemas import (
     Balance,
     DepositRequest,
     ReservationOut,
     ReservationReleaseOut,
-    ReservationReleaseRequest,
     ReservationRequest,
     TransactionResponse,
 )
@@ -27,9 +25,7 @@ log = logging.getLogger(__name__)
 
 router = APIRouter(tags=["account"])
 
-ZERO = Decimal("0.0000")
 MAX_TX_LIMIT = 200
-LOCK_WAIT_SECONDS = 2.0
 
 
 def _balance_out(account: Account) -> Balance:
@@ -39,7 +35,15 @@ def _balance_out(account: Account) -> Balance:
         cash_balance=str(account.cash_balance),
         held_balance=str(account.held_balance),
         available_balance=str(available),
+        currency=account.currency,
     )
+
+
+def _parse_uuid(value: str, field: str) -> uuid.UUID:
+    try:
+        return uuid.UUID(value)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"{field} must be a UUID")
 
 
 @router.get("/account/balance", response_model=Balance)
@@ -59,7 +63,7 @@ async def deposit(
 ):
     amount = to_money(body.amount)
     try:
-        async with distributed_lock(redis, f"lock:funds:{user.id}", wait_seconds=LOCK_WAIT_SECONDS):
+        async with funds_lock(redis, user.id):
             account = await get_or_create_account(session, user.id)
             account.cash_balance += amount
             session.add(
@@ -74,7 +78,7 @@ async def deposit(
             await session.commit()
             await session.refresh(account)
             return _balance_out(account)
-    except LockTimeout:
+    except FundsLockUnavailable:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="try again")
 
 
@@ -82,23 +86,41 @@ async def deposit(
 async def list_transactions(
     limit: int = Query(50, ge=1, le=MAX_TX_LIMIT),
     offset: int = Query(0, ge=0),
+    type: str | None = Query(None, description="filter by transaction type, e.g. DEPOSIT"),
     user: CurrentUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ):
-    stmt = (
-        select(Transaction)
-        .where(Transaction.user_id == user.id)
-        .order_by(Transaction.created_at.desc())
-        .limit(limit)
-        .offset(offset)
-    )
+    stmt = select(Transaction).where(Transaction.user_id == user.id)
+    if type:
+        stmt = stmt.where(Transaction.type == type.upper())
+    stmt = stmt.order_by(Transaction.created_at.desc()).limit(limit).offset(offset)
     return list((await session.execute(stmt)).scalars().all())
 
 
 # --------------------------------------------------------------------------- #
-# Internal — reservations. Never reachable through the gateway (it refuses to
-# proxy any path containing /internal/), so X-Internal-Key is the only guard.
+# Internal — reservations and account lookup. Never reachable through the
+# gateway (it refuses to proxy any path containing /internal/), so
+# X-Internal-Key is the only guard.
 # --------------------------------------------------------------------------- #
+@router.get(
+    "/internal/accounts/{user_id}",
+    response_model=Balance,
+    dependencies=[Depends(require_internal_key)],
+)
+async def internal_get_account(user_id: str, session: AsyncSession = Depends(get_session)):
+    uid = _parse_uuid(user_id, "user_id")
+    try:
+        async with funds_lock(redis, uid):
+            # Same lock as every other first-touch — without it, two
+            # concurrent lookups for a brand-new user_id could both try to
+            # INSERT the same account row.
+            account = await get_or_create_account(session, uid)
+            await session.commit()  # persist a get-or-create's implicit new row
+            return _balance_out(account)
+    except FundsLockUnavailable:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="try again")
+
+
 @router.post(
     "/internal/reservations",
     response_model=ReservationOut,
@@ -106,22 +128,26 @@ async def list_transactions(
     dependencies=[Depends(require_internal_key)],
 )
 async def reserve_funds(body: ReservationRequest, session: AsyncSession = Depends(get_session)):
-    try:
-        order_id = uuid.UUID(body.order_id)
-        user_id = uuid.UUID(body.user_id)
-    except ValueError:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="order_id/user_id must be UUIDs")
+    order_id = _parse_uuid(body.order_id, "order_id")
+    user_id = _parse_uuid(body.user_id, "user_id")
     amount = to_money(body.amount)
 
     try:
-        async with distributed_lock(redis, f"lock:funds:{user_id}", wait_seconds=LOCK_WAIT_SECONDS):
+        async with funds_lock(redis, user_id):
             # Idempotent on order_id: a retried call after a dropped response
-            # must not double-reserve.
+            # must not double-reserve. Rows are never deleted, so this also
+            # catches a retry arriving after the reservation has since moved
+            # to CONSUMED/RELEASED — it just echoes back the original hold.
             existing = (
                 await session.execute(select(Reservation).where(Reservation.order_id == order_id))
             ).scalars().first()
             if existing is not None:
-                return ReservationOut(order_id=str(order_id), user_id=str(existing.user_id), amount=str(existing.amount), status="HELD")
+                return ReservationOut(
+                    order_id=str(order_id),
+                    user_id=str(existing.user_id),
+                    amount_held=str(existing.amount_held),
+                    status=existing.status,
+                )
 
             account = await get_or_create_account(session, user_id)
             available = account.cash_balance - account.held_balance
@@ -129,7 +155,7 @@ async def reserve_funds(body: ReservationRequest, session: AsyncSession = Depend
                 raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="insufficient buying power")
 
             account.held_balance += amount
-            session.add(Reservation(order_id=order_id, user_id=user_id, amount=amount))
+            session.add(Reservation(order_id=order_id, user_id=user_id, amount_held=amount, status=HELD))
             session.add(
                 Transaction(
                     user_id=user_id,
@@ -141,8 +167,8 @@ async def reserve_funds(body: ReservationRequest, session: AsyncSession = Depend
                 )
             )
             await session.commit()
-            return ReservationOut(order_id=str(order_id), user_id=str(user_id), amount=str(amount), status="HELD")
-    except LockTimeout:
+            return ReservationOut(order_id=str(order_id), user_id=str(user_id), amount_held=str(amount), status=HELD)
+    except FundsLockUnavailable:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="try again")
 
 
@@ -151,38 +177,28 @@ async def reserve_funds(body: ReservationRequest, session: AsyncSession = Depend
     response_model=ReservationReleaseOut,
     dependencies=[Depends(require_internal_key)],
 )
-async def release_reservation(
-    order_id: str,
-    body: ReservationReleaseRequest = ReservationReleaseRequest(),
-    session: AsyncSession = Depends(get_session),
-):
-    try:
-        oid = uuid.UUID(order_id)
-    except ValueError:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="order_id must be a UUID")
+async def release_reservation(order_id: str, session: AsyncSession = Depends(get_session)):
+    oid = _parse_uuid(order_id, "order_id")
 
     reservation = (
         await session.execute(select(Reservation).where(Reservation.order_id == oid))
     ).scalars().first()
     if reservation is None:
-        # Already released (or never held, e.g. a SELL order) — release is
-        # idempotent, so this is a success, not a 404.
-        return ReservationReleaseOut(order_id=order_id, released_amount="0.0000", remaining_amount="0.0000")
+        # 404 only here: the order_id was never reserved at all. An
+        # already-resolved reservation is a 200 with released="0.0000" below —
+        # release must be safe to call more than once.
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="no reservation for this order_id")
+
+    remaining = reservation.remaining
+    if remaining <= 0:
+        return ReservationReleaseOut(order_id=order_id, released="0.0000")
 
     user_id = reservation.user_id
-    requested = to_money(body.amount) if body.amount is not None else reservation.amount
-
     try:
-        async with distributed_lock(redis, f"lock:funds:{user_id}", wait_seconds=LOCK_WAIT_SECONDS):
-            released = min(requested, reservation.amount)
+        async with funds_lock(redis, user_id):
             account = await get_or_create_account(session, user_id)
-            account.held_balance = max(ZERO, account.held_balance - released)
-            reservation.amount -= released
-            remaining = reservation.amount
-            if remaining <= ZERO:
-                await session.delete(reservation)
-                remaining = ZERO
-            if released > ZERO:
+            released = release_remaining(reservation, account)
+            if released > 0:
                 session.add(
                     Transaction(
                         user_id=user_id,
@@ -194,8 +210,6 @@ async def release_reservation(
                     )
                 )
             await session.commit()
-            return ReservationReleaseOut(
-                order_id=order_id, released_amount=str(released), remaining_amount=str(remaining)
-            )
-    except LockTimeout:
+            return ReservationReleaseOut(order_id=order_id, released=str(released))
+    except FundsLockUnavailable:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="try again")

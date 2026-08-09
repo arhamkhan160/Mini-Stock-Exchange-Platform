@@ -2,7 +2,18 @@
 
 Plain asserts, no pytest. Exercises the event handlers against a real Postgres
 and Redis, then the HTTP routes (including the internal reservation
-endpoints) through an in-process ASGI transport.
+endpoints) through an in-process ASGI transport. Encodes the exact numbers
+from TEAM_B_IDENTITY_AND_ASSETS.md §6:
+
+    deposit 10000 -> available 10000
+    reserve 2000 (order X) -> available 8000, held 2000
+    reserve order X again -> still held 2000
+    reserve 9000 -> 409
+    emit trade.executed filling 5 @ 200 (limit 210, remaining 5) -> cash 9000, held 950
+    emit the final fill (remaining 0) -> cash 8000, held 0
+    emit the same event twice -> numbers unchanged
+    release a cancelled order twice -> second returns "0.0000"
+    deposit -1 -> 400
 
 Run:
     docker compose up -d postgres-account redis rabbitmq
@@ -34,6 +45,7 @@ from app.models import Account, ProcessedEvent, Reservation, Transaction
 
 BUYER = str(uuid.uuid4())
 SELLER = str(uuid.uuid4())
+ORDER_X = str(uuid.uuid4())
 PASSED: list[str] = []
 
 
@@ -68,8 +80,7 @@ async def reset() -> None:
 
 async def balance_of(user_id: str) -> Account:
     async with SessionLocal() as s:
-        row = (await s.execute(select(Account).where(Account.user_id == uuid.UUID(user_id)))).scalar_one()
-        return row
+        return (await s.execute(select(Account).where(Account.user_id == uuid.UUID(user_id)))).scalar_one()
 
 
 async def reservation_of(order_id: str) -> Reservation | None:
@@ -79,8 +90,7 @@ async def reservation_of(order_id: str) -> Reservation | None:
         ).scalars().first()
 
 
-def trade_event(buy_order_id: str, price: str, quantity: int, limit_price: str | None,
-                 buy_remaining: int, sell_remaining: int = 0) -> dict:
+def trade_event(buy_order_id: str, price: str, quantity: int, limit_price: str | None, buy_remaining: int) -> dict:
     return envelope(
         TRADE_EXECUTED,
         {
@@ -94,7 +104,7 @@ def trade_event(buy_order_id: str, price: str, quantity: int, limit_price: str |
             "seller_user_id": SELLER,
             "aggressor_side": "BUY",
             "buy_order_remaining": buy_remaining,
-            "sell_order_remaining": sell_remaining,
+            "sell_order_remaining": 0,
             "buy_order_limit_price": limit_price,
             "executed_at": "2026-08-10T12:00:00.000000Z",
         },
@@ -117,124 +127,109 @@ async def main() -> None:
         ok("/health is a pure liveness check")
 
         r = await client.get("/account/balance", headers=h_buyer)
-        assert r.status_code == 200 and r.json()["cash_balance"] == "0.0000", r.text
-        ok("a brand-new account starts at zero (get-or-create)")
+        assert r.status_code == 200 and r.json()["cash_balance"] == "0.0000" and r.json()["currency"] == "USD", r.text
+        ok("a brand-new account starts at zero USD (get-or-create)")
 
+        # ---- deposit 10000 -> available 10000 ------------------------------
         r = await client.post("/account/deposit", headers=h_buyer, json={"amount": "10000.00"})
-        assert r.status_code == 200 and r.json()["cash_balance"] == "10000.0000", r.text
-        ok("deposit increases cash_balance")
+        assert r.status_code == 200 and r.json()["available_balance"] == "10000.0000", r.text
+        ok("deposit 10000 -> available 10000")
 
-        r = await client.post("/account/deposit", headers=h_buyer, json={"amount": "-5"})
-        assert r.status_code == 422, r.text
-        ok("negative deposit is rejected")
+        r = await client.post("/account/deposit", headers=h_buyer, json={"amount": "-1"})
+        assert r.status_code == 400, r.text
+        ok("deposit -1 -> 400")
+
+        r = await client.post("/account/deposit", headers=h_buyer, json={"amount": "10.00001"})
+        assert r.status_code == 400, r.text
+        ok("deposit with more than 2 decimal places -> 400")
 
         r = await client.get("/account/transactions", headers=h_buyer)
         assert r.status_code == 200 and len(r.json()) == 1 and r.json()[0]["type"] == "DEPOSIT", r.text
         ok("deposit is recorded in the ledger")
 
-        # ---- internal reservation: LIMIT buy order holds price*qty --------
-        order_id = str(uuid.uuid4())
+        r = await client.get("/account/transactions?type=deposit", headers=h_buyer)
+        assert r.status_code == 200 and len(r.json()) == 1, r.text
+        ok("transaction listing can filter by type (case-insensitive)")
+
+        # ---- reserve 2000 (order X) -> available 8000, held 2000 -----------
         r = await client.post(
             "/internal/reservations", headers=h_internal,
-            json={"order_id": order_id, "user_id": BUYER, "amount": "1000.0000"},
+            json={"order_id": ORDER_X, "user_id": BUYER, "amount": "2000.0000"},
         )
         assert r.status_code == 201 and r.json()["status"] == "HELD", r.text
-        ok("reserving funds for a new order succeeds")
-
         acct = await balance_of(BUYER)
-        assert acct.held_balance == Decimal("1000.0000"), acct.held_balance
+        assert acct.held_balance == Decimal("2000.0000"), acct.held_balance
         assert acct.cash_balance == Decimal("10000.0000"), "reserving must not touch cash_balance"
-        ok("reservation moves cash into held_balance without touching cash_balance")
+        ok("reserve 2000 (order X) -> available 8000, held 2000")
 
-        # replaying the same reservation call must not double-hold
+        # ---- reserve order X again -> still held 2000 (idempotent) --------
         r = await client.post(
             "/internal/reservations", headers=h_internal,
-            json={"order_id": order_id, "user_id": BUYER, "amount": "1000.0000"},
+            json={"order_id": ORDER_X, "user_id": BUYER, "amount": "2000.0000"},
         )
         assert r.status_code == 201, r.text
         acct = await balance_of(BUYER)
-        assert acct.held_balance == Decimal("1000.0000"), "a retried reservation call must be idempotent on order_id"
-        ok("re-reserving the same order_id is idempotent")
+        assert acct.held_balance == Decimal("2000.0000"), "a retried reservation call must be idempotent on order_id"
+        ok("re-reserving order X is idempotent — still held 2000")
 
-        # available balance rejects an over-limit reservation
+        # ---- reserve 9000 -> 409 (only 8000 available) ---------------------
         r = await client.post(
             "/internal/reservations", headers=h_internal,
-            json={"order_id": str(uuid.uuid4()), "user_id": BUYER, "amount": "50000.00"},
+            json={"order_id": str(uuid.uuid4()), "user_id": BUYER, "amount": "9000.00"},
         )
         assert r.status_code == 409, r.text
-        ok("reserving more than the available balance is a 409")
+        ok("reserve 9000 -> 409 (insufficient buying power)")
 
-        # ---- trade.executed: full fill at the limit price releases nothing,
-        # consumes the whole reservation and charges cash -------------------
-        await handlers.handle_trade_executed(
-            trade_event(order_id, price="10.0000", quantity=100, limit_price="10.0000", buy_remaining=0)
-        )
+        # ---- partial fill: 5 @ 200, limit 210, remaining 5 -----------------
+        env = trade_event(ORDER_X, price="200.0000", quantity=5, limit_price="210.0000", buy_remaining=5)
+        await handlers.handle_trade_executed(env)
         acct = await balance_of(BUYER)
         assert acct.cash_balance == Decimal("9000.0000"), acct.cash_balance
-        assert acct.held_balance == Decimal("0.0000"), acct.held_balance
-        assert await reservation_of(order_id) is None, "a fully-filled order must have no reservation left"
-        seller_acct = await balance_of(SELLER)
-        assert seller_acct.cash_balance == Decimal("1000.0000"), seller_acct.cash_balance
-        ok("full fill at the limit price settles both sides and clears the hold")
+        assert acct.held_balance == Decimal("950.0000"), acct.held_balance
+        res = await reservation_of(ORDER_X)
+        assert res.status == "HELD" and res.remaining == Decimal("950.0000"), res
+        ok("partial fill 5 @ 200 (limit 210, remaining 5) -> cash 9000, held 950")
 
-        # replaying the same trade.executed event must be a no-op
-        acct_before = await balance_of(BUYER)
-        env = trade_event(order_id, price="10.0000", quantity=100, limit_price="10.0000", buy_remaining=0)
+        # replaying the exact same event must be a no-op
         await handlers.handle_trade_executed(env)
-        await handlers.handle_trade_executed(env)  # exact same envelope, same event_id
-        acct_after = await balance_of(BUYER)
-        assert acct_after.cash_balance == acct_before.cash_balance, "duplicate trade.executed must not double-charge"
-        ok("duplicate trade.executed (same event_id) is a no-op")
+        acct2 = await balance_of(BUYER)
+        assert acct2.cash_balance == acct.cash_balance and acct2.held_balance == acct.held_balance
+        ok("replaying the same trade.executed event changes nothing")
 
-        # a replay surviving a redis flush must still be caught by processed_events
+        # survives a redis flush too (processed_events is the real authority)
         await redis.flushdb()
         await handlers.handle_trade_executed(env)
-        acct_after2 = await balance_of(BUYER)
-        assert acct_after2.cash_balance == acct_before.cash_balance, "processed_events must stop a replay after a redis flush"
-        ok("duplicate survives a redis flush via processed_events")
+        acct3 = await balance_of(BUYER)
+        assert acct3.cash_balance == acct.cash_balance and acct3.held_balance == acct.held_balance
+        ok("the duplicate still no-ops after a redis flush (processed_events)")
 
-        # ---- price improvement: fill below the limit releases the slack ---
-        order_id2 = str(uuid.uuid4())
+        # ---- final fill: remaining 0 -> cash 8000, held 0 -------------------
+        final_env = trade_event(ORDER_X, price="200.0000", quantity=5, limit_price="210.0000", buy_remaining=0)
+        await handlers.handle_trade_executed(final_env)
+        acct = await balance_of(BUYER)
+        assert acct.cash_balance == Decimal("8000.0000"), acct.cash_balance
+        assert acct.held_balance == Decimal("0.0000"), acct.held_balance
+        res = await reservation_of(ORDER_X)
+        assert res.status in ("CONSUMED", "RELEASED"), res.status
+        ok("final fill (remaining 0) -> cash 8000, held 0")
+
+        # ---- order.cancelled / order.rejected release -----------------------
+        order_y = str(uuid.uuid4())
         await client.post(
             "/internal/reservations", headers=h_internal,
-            json={"order_id": order_id2, "user_id": BUYER, "amount": "500.0000"},  # held at limit 10.00 * 50
+            json={"order_id": order_y, "user_id": BUYER, "amount": "500.0000"},
         )
-        acct_before = await balance_of(BUYER)
-        await handlers.handle_trade_executed(
-            trade_event(order_id2, price="9.0000", quantity=50, limit_price="10.0000", buy_remaining=0)
-        )
-        acct_after = await balance_of(BUYER)
-        assert acct_after.cash_balance == acct_before.cash_balance - Decimal("450.0000"), acct_after.cash_balance
-        assert acct_after.held_balance == acct_before.held_balance - Decimal("500.0000"), "the full hold must clear on the final fill"
-        ok("filling below the limit price charges the execution price and releases the improvement")
-
-        # ---- partial fill: reservation shrinks, held stays for the rest ---
-        order_id3 = str(uuid.uuid4())
-        await client.post(
-            "/internal/reservations", headers=h_internal,
-            json={"order_id": order_id3, "user_id": BUYER, "amount": "1000.0000"},  # 100 @ 10.00
-        )
-        await handlers.handle_trade_executed(
-            trade_event(order_id3, price="10.0000", quantity=40, limit_price="10.0000", buy_remaining=60)
-        )
-        res = await reservation_of(order_id3)
-        assert res is not None and res.amount == Decimal("600.0000"), res
-        ok("a partial fill shrinks the reservation but leaves it open")
-
-        # ---- order.cancelled releases whatever remains ---------------------
-        acct_before = await balance_of(BUYER)
         await handlers.handle_order_cancelled(
             envelope(ORDER_CANCELLED, {
-                "order_id": order_id3, "user_id": BUYER, "symbol": "AAPL", "side": "BUY",
-                "cancelled_quantity": 60, "reason": "USER_REQUEST", "cancelled_at": "2026-08-10T12:01:00Z",
+                "order_id": order_y, "user_id": BUYER, "symbol": "AAPL", "side": "BUY",
+                "cancelled_quantity": 5, "reason": "USER_REQUEST", "cancelled_at": "2026-08-10T12:01:00Z",
             })
         )
-        acct_after = await balance_of(BUYER)
-        assert acct_after.held_balance == acct_before.held_balance - Decimal("600.0000"), acct_after.held_balance
-        assert await reservation_of(order_id3) is None
+        acct = await balance_of(BUYER)
+        assert acct.held_balance == Decimal("0.0000"), acct.held_balance
         ok("order.cancelled releases the remaining hold")
 
-        # cancelling/rejecting an order with no reservation (e.g. a SELL) is a no-op, not an error
+        # cancelling/rejecting an order with no reservation is a harmless no-op
         await handlers.handle_order_rejected(
             envelope(ORDER_REJECTED, {
                 "order_id": str(uuid.uuid4()), "user_id": SELLER, "symbol": "AAPL",
@@ -243,21 +238,25 @@ async def main() -> None:
         )
         ok("releasing a reservation that never existed does not raise")
 
-        # ---- internal release endpoint, called directly ---------------------
-        order_id4 = str(uuid.uuid4())
+        # ---- REST release endpoint, twice -----------------------------------
+        order_z = str(uuid.uuid4())
         await client.post(
             "/internal/reservations", headers=h_internal,
-            json={"order_id": order_id4, "user_id": BUYER, "amount": "200.0000"},
+            json={"order_id": order_z, "user_id": BUYER, "amount": "200.0000"},
         )
-        r = await client.post(f"/internal/reservations/{order_id4}/release", headers=h_internal)
-        assert r.status_code == 200 and r.json()["released_amount"] == "200.0000", r.text
+        r = await client.post(f"/internal/reservations/{order_z}/release", headers=h_internal)
+        assert r.status_code == 200 and r.json()["released"] == "200.0000", r.text
         ok("POST /internal/reservations/{id}/release frees the full hold")
 
-        r = await client.post(f"/internal/reservations/{order_id4}/release", headers=h_internal)
-        assert r.status_code == 200 and r.json()["released_amount"] == "0.0000", r.text
-        ok("releasing an already-released order_id is idempotent, not a 404")
+        r = await client.post(f"/internal/reservations/{order_z}/release", headers=h_internal)
+        assert r.status_code == 200 and r.json()["released"] == "0.0000", r.text
+        ok("releasing an already-released order_id is idempotent — second call returns 0.0000")
 
-        # ---- auth/authorization -------------------------------------------
+        r = await client.post(f"/internal/reservations/{uuid.uuid4()}/release", headers=h_internal)
+        assert r.status_code == 404, r.text
+        ok("releasing an order_id that was never reserved at all is 404")
+
+        # ---- auth/authorization ----------------------------------------------
         r = await client.get("/account/balance")
         assert r.status_code == 401, r.text
         ok("balance without a token is 401")
@@ -269,6 +268,10 @@ async def main() -> None:
         r = await client.get("/account/balance", headers=h_seller)
         assert r.status_code == 200 and r.json()["user_id"] == SELLER, r.text
         ok("balance is scoped to the caller from the JWT")
+
+        r = await client.get(f"/internal/accounts/{BUYER}", headers=h_internal)
+        assert r.status_code == 200 and r.json()["cash_balance"] == "8000.0000", r.text
+        ok("GET /internal/accounts/{id} returns any user's balance for debugging")
 
     await redis.aclose()
     await engine.dispose()

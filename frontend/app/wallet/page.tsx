@@ -57,7 +57,12 @@ function WalletContent() {
                 <span className="num text-ink">{balance ? money(balance.cash_balance) : "—"}</span>
               </div>
               <div className="flex justify-between">
-                <span className="text-muted">Held for orders</span>
+                <span
+                  className="cursor-help text-muted underline decoration-dotted"
+                  title="Cash reserved against your open BUY orders. It's still yours, but it isn't available to place a new order until the order fills, is cancelled, or is rejected."
+                >
+                  Held for orders
+                </span>
                 <span className="num text-warn">{balance ? money(balance.held_balance) : "—"}</span>
               </div>
             </div>

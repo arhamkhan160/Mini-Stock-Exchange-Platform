@@ -1,0 +1,15 @@
+# Local dependencies for developing the User Service on its own.
+#   docker compose -f docker-compose.dev.yml up -d
+#   (from the repo root, PowerShell)
+#   $env:PYTHONPATH=".;./libs"
+#   $env:DATABASE_URL="postgresql+asyncpg://mse:mse_pw@localhost:5433/user_db"
+#   $env:SERVICE_PORT="8001"
+#   uvicorn app.main:app --reload --port 8001
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: mse
+      POSTGRES_PASSWORD: mse_pw
+      POSTGRES_DB: user_db
+    ports: ["5433:5432"]

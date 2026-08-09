@@ -1,12 +1,52 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { MarketAPI, ApiError } from "@/lib/api";
 import { useLivePrices } from "@/lib/ws";
 import { money, pct, price as fmtPrice, toneOf } from "@/lib/format";
 import { Button, Card, Empty, ErrorBox, Spinner, Table } from "./ui";
 import type { SymbolQuote } from "@/lib/types";
+
+function useFlash(value: string | undefined): "up" | "down" | null {
+  const prev = useRef<string | undefined>(value);
+  const [flash, setFlash] = useState<"up" | "down" | null>(null);
+
+  useEffect(() => {
+    if (value !== undefined && prev.current !== undefined && value !== prev.current) {
+      setFlash(Number(value) >= Number(prev.current) ? "up" : "down");
+      const t = setTimeout(() => setFlash(null), 600);
+      prev.current = value;
+      return () => clearTimeout(t);
+    }
+    prev.current = value;
+  }, [value]);
+
+  return flash;
+}
+
+function SymbolRow({ quote, livePrice }: { quote: SymbolQuote; livePrice: string | undefined }) {
+  const last = livePrice ?? quote.last_price;
+  const flash = useFlash(livePrice);
+
+  return (
+    <tr className="border-b border-line last:border-0">
+      <td className="px-3 py-3">
+        <div className="font-semibold text-ink">{quote.symbol}</div>
+        <div className="text-xs text-muted">{quote.name}</div>
+      </td>
+      <td className={`num px-3 py-3 text-ink ${flash ? `flash-${flash}` : ""}`}>{money(last)}</td>
+      <td className={`num px-3 py-3 ${toneOf(quote.change_pct)}`}>
+        {fmtPrice(quote.change)} ({pct(quote.change_pct)})
+      </td>
+      <td className="px-3 py-3 text-right">
+        <Link href={`/market/${quote.symbol}`}>
+          <Button variant="ghost">Trade</Button>
+        </Link>
+      </td>
+    </tr>
+  );
+}
 
 export default function SymbolTable() {
   const [symbols, setSymbols] = useState<SymbolQuote[]>([]);
@@ -30,32 +70,16 @@ export default function SymbolTable() {
     <Card
       title="Live markets"
       right={
-        <span className="text-xs text-muted">
-          {status === "live" ? "● live" : status === "connecting" ? "connecting…" : "reconnecting…"}
+        <span className="flex items-center gap-1.5 text-xs text-muted">
+          <span className={`h-1.5 w-1.5 rounded-full ${status === "live" ? "bg-up" : "bg-warn"}`} />
+          {status === "live" ? "Live" : status === "connecting" ? "Connecting…" : "Reconnecting…"}
         </span>
       }
     >
       <Table head={["Symbol", "Last price", "24h change", ""]}>
-        {symbols.map((s) => {
-          const last = prices[s.symbol] ?? s.last_price;
-          return (
-            <tr key={s.symbol} className="border-b border-line last:border-0">
-              <td className="px-3 py-3">
-                <div className="font-semibold text-ink">{s.symbol}</div>
-                <div className="text-xs text-muted">{s.name}</div>
-              </td>
-              <td className="num px-3 py-3 text-ink">{money(last)}</td>
-              <td className={`num px-3 py-3 ${toneOf(s.change_pct)}`}>
-                {fmtPrice(s.change)} ({pct(s.change_pct)})
-              </td>
-              <td className="px-3 py-3 text-right">
-                <Link href={`/market/${s.symbol}`}>
-                  <Button variant="ghost">Trade</Button>
-                </Link>
-              </td>
-            </tr>
-          );
-        })}
+        {symbols.map((s) => (
+          <SymbolRow key={s.symbol} quote={s} livePrice={prices[s.symbol]} />
+        ))}
       </Table>
     </Card>
   );

@@ -1,36 +1,73 @@
+"use client";
+
+import { useCallback, useEffect, useState } from "react";
+import Protected from "@/components/Protected";
 import SymbolTable from "@/components/SymbolTable";
-import { Card } from "@/components/ui";
+import { AccountAPI, ApiError, PortfolioAPI } from "@/lib/api";
+import { money } from "@/lib/format";
+import { Card, Tone } from "@/components/ui";
+import type { Balance, Portfolio } from "@/lib/types";
 
-const STEPS = [
-  { n: 1, title: "Create an account", body: "Sign up instantly and get your own trader identity." },
-  { n: 2, title: "Deposit funds", body: "Add virtual USD to your wallet to build buying power." },
-  { n: 3, title: "Start trading", body: "Place limit and market orders on the matching engine." },
-];
+function DashboardContent() {
+  const [balance, setBalance] = useState<Balance | null>(null);
+  const [pnl, setPnl] = useState<Portfolio["totals"] | null>(null);
+  // Portfolio is a separate service (CQRS) — if it's unreachable or still
+  // catching up, the summary must degrade gracefully, not show a wrong number.
+  const [pnlError, setPnlError] = useState(false);
 
-export default function Home() {
+  const load = useCallback(() => {
+    AccountAPI.balance()
+      .then(setBalance)
+      .catch(() => {});
+    PortfolioAPI.pnl()
+      .then((p) => {
+        setPnl(p);
+        setPnlError(false);
+      })
+      .catch(() => setPnlError(true));
+  }, []);
+
+  useEffect(() => {
+    load();
+    const t = setInterval(load, 15000);
+    return () => clearInterval(t);
+  }, [load]);
+
   return (
-    <div className="space-y-10">
-      <div className="text-center">
-        <h1 className="text-3xl font-bold text-ink">Mini Stock Exchange</h1>
-        <p className="mx-auto mt-2 max-w-2xl text-sm text-muted">
-          A microservices-based paper trading exchange. Trade live market data, manage your
-          portfolio, and test strategies with zero real-money risk.
-        </p>
+    <div className="space-y-6">
+      <h1 className="text-xl font-semibold text-ink">Dashboard</h1>
+
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+        <Card title="Available cash">
+          <div className="num text-2xl font-bold text-ink">
+            {balance ? money(balance.available_balance) : "—"}
+          </div>
+        </Card>
+        <Card title="Portfolio value">
+          <div className="num text-2xl font-bold text-ink">
+            {pnl ? money(pnl.total_market_value) : pnlError ? "updating…" : "—"}
+          </div>
+        </Card>
+        <Card title="Total P&L">
+          {pnl ? (
+            <Tone value={pnl.total_unrealized_pnl}>
+              <span className="num text-2xl font-bold">{money(pnl.total_unrealized_pnl)}</span>
+            </Tone>
+          ) : (
+            <div className="num text-2xl font-bold text-muted">{pnlError ? "updating…" : "—"}</div>
+          )}
+        </Card>
       </div>
 
       <SymbolTable />
-
-      <div className="grid grid-cols-1 gap-4 border-t border-line pt-8 md:grid-cols-3">
-        {STEPS.map((step) => (
-          <Card key={step.n} className="text-center">
-            <div className="mx-auto mb-3 flex h-10 w-10 items-center justify-center rounded-full bg-accent/15 text-sm font-bold text-accent">
-              {step.n}
-            </div>
-            <h3 className="mb-1 text-sm font-semibold text-ink">{step.title}</h3>
-            <p className="text-xs text-muted">{step.body}</p>
-          </Card>
-        ))}
-      </div>
     </div>
+  );
+}
+
+export default function DashboardPage() {
+  return (
+    <Protected>
+      <DashboardContent />
+    </Protected>
   );
 }
