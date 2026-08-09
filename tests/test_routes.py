@@ -384,6 +384,36 @@ def order_placement_is_rate_limited_harder_than_reads():
 
 
 @check
+def default_traffic_does_not_consume_the_order_bucket():
+    from app.ratelimit import DEFAULT_LIMIT, ORDER_PLACEMENT_LIMIT
+
+    redis = FakeRedis()
+    app, httpx, _seen = build_gateway(redis=redis)
+    auth = {"Authorization": f"Bearer {token_for()}"}
+
+    async def run():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://gw") as client:
+            for _ in range(ORDER_PLACEMENT_LIMIT + 1):
+                r = await client.get("/api/notifications/unread-count", headers=auth)
+                assert r.status_code == 200, f"default bucket tripped early at {r.status_code}"
+
+            r = await client.post("/api/orders", json={}, headers=auth)
+            assert r.status_code == 200, (
+                "reads and notification polling must not spend the order-placement quota"
+            )
+
+            for _ in range(DEFAULT_LIMIT - ORDER_PLACEMENT_LIMIT - 1):
+                r = await client.get("/api/notifications/unread-count", headers=auth)
+                assert r.status_code == 200, f"default bucket tripped early at {r.status_code}"
+
+            r = await client.get("/api/notifications/unread-count", headers=auth)
+            assert r.status_code == 429, "default bucket should still enforce its own limit"
+
+    asyncio.run(run())
+
+
+@check
 def bot_accounts_are_exempt_from_the_order_limit():
     from app.ratelimit import BOT_LIMIT, ORDER_PLACEMENT_LIMIT
 

@@ -17,6 +17,8 @@ ORDER_PLACEMENT_LIMIT = 30   # POST /api/orders is the expensive path
 BOT_LIMIT = 1200             # seed / market-maker accounts
 
 BOT_EMAIL_SUFFIX = "@mse.local"
+DEFAULT_BUCKET = "default"
+ORDER_PLACEMENT_BUCKET = "orders:write"
 
 _redis_warned_at = 0.0
 
@@ -30,12 +32,19 @@ def limit_for(method: str, path: str, claims: dict | None) -> int:
     return DEFAULT_LIMIT
 
 
-async def enforce(redis, identity: str, limit: int) -> None:
+def bucket_for(method: str, path: str) -> str:
+    """Keep route classes in separate counters when their limits differ."""
+    if method == "POST" and path.startswith("/api/orders"):
+        return ORDER_PLACEMENT_BUCKET
+    return DEFAULT_BUCKET
+
+
+async def enforce(redis, identity: str, limit: int, bucket: str = DEFAULT_BUCKET) -> None:
     """Raise 429 when `identity` exceeds `limit` within the current minute."""
     global _redis_warned_at
 
     window = int(time.time() // 60)
-    key = f"ratelimit:{identity}:{window}"
+    key = f"ratelimit:{identity}:{bucket}:{window}"
     try:
         count = await redis.incr(key)
         if count == 1:

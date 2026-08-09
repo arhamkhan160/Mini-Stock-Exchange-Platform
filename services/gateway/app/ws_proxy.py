@@ -15,6 +15,7 @@ from collections import Counter
 
 import websockets
 from fastapi import WebSocket, WebSocketDisconnect
+from websockets.exceptions import ConnectionClosed
 
 from common.config import settings
 
@@ -56,20 +57,30 @@ async def bridge_market(client_ws: WebSocket) -> None:
 
             async def client_to_upstream() -> None:
                 while True:
-                    await upstream.send(await client_ws.receive_text())
+                    try:
+                        message = await client_ws.receive_text()
+                    except WebSocketDisconnect:
+                        return
+                    try:
+                        await upstream.send(message)
+                    except ConnectionClosed:
+                        return
 
             async def upstream_to_client() -> None:
-                async for message in upstream:
-                    await client_ws.send_text(message)
+                try:
+                    async for message in upstream:
+                        await client_ws.send_text(message)
+                except (ConnectionClosed, WebSocketDisconnect, RuntimeError):
+                    return
 
             tasks = {
                 asyncio.create_task(client_to_upstream()),
                 asyncio.create_task(upstream_to_client()),
             }
-            _done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+            done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
             for task in pending:
                 task.cancel()
-            await asyncio.gather(*pending, return_exceptions=True)
+            await asyncio.gather(*done, *pending, return_exceptions=True)
 
     except WebSocketDisconnect:
         pass
