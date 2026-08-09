@@ -17,6 +17,18 @@ class Base(DeclarativeBase):
 
 
 def make_engine(url: str, **kwargs) -> AsyncEngine:
+    # An unset DATABASE_URL otherwise dies with SQLAlchemy's opaque
+    # "Could not parse SQLAlchemy URL from given URL string".
+    if not url:
+        raise RuntimeError(
+            "DATABASE_URL is empty. Copy .env.example to .env, or export it: "
+            "postgresql+asyncpg://mse:mse_pw@localhost:<port>/<db>"
+        )
+    if "+asyncpg" not in url:
+        raise RuntimeError(
+            f"DATABASE_URL must use the asyncpg driver (postgresql+asyncpg://...), got: {url!r}. "
+            "Alembic is the only place that uses psycopg2, via common.db.sync_url()."
+        )
     return create_async_engine(
         url,
         pool_pre_ping=True,   # survives Postgres restarts during development

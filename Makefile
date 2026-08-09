@@ -5,7 +5,8 @@
 INFRA := postgres-user postgres-account postgres-order postgres-market-primary \
          postgres-market-replica postgres-portfolio postgres-notification redis rabbitmq
 
-.PHONY: help env infra up down nuke restart logs ps smoke seed mm repl replica-lag health
+.PHONY: help env infra up down nuke restart logs ps smoke seed mm repl replica-lag health \
+        test test-contract test-routes selfcheck verify
 
 help:
 	@echo "make env      - create .env from .env.example (does not overwrite)"
@@ -18,7 +19,10 @@ help:
 	@echo "make health   - curl /health on every service"
 	@echo "make seed     - seed candle history and run the market-maker bot"
 	@echo "make mm       - run the market maker in a loop (live demo)"
-	@echo "make smoke    - end-to-end smoke test"
+	@echo "make test     - offline tests: contract + routes (no docker needed)"
+	@echo "make selfcheck- per-service self-checks"
+	@echo "make verify   - verify a RUNNING stack (health, queues, replication)"
+	@echo "make smoke    - end-to-end business flow test"
 	@echo "make repl     - show streaming replication status"
 
 env:
@@ -51,6 +55,24 @@ health:
 		printf "%s " $$p; \
 		curl -s -o /dev/null -w "%{http_code}\n" http://localhost:$$p/health || echo "down"; \
 	done
+
+# Offline: no docker, no database, no broker.
+test:
+	python tests/run_all.py
+
+test-contract:
+	python tests/test_contract.py
+
+test-routes:
+	python tests/test_routes.py
+
+# The gateway needs nothing; the notification check needs its dev containers.
+selfcheck:
+	cd services/gateway && PYTHONPATH=".:../../libs" python selfcheck.py
+
+# Against a running stack.
+verify:
+	python scripts/verify_stack.py
 
 seed:
 	python infra/seed/seed_market_data.py && python infra/seed/market_maker.py

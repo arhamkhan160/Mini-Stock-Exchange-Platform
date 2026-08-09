@@ -11,6 +11,9 @@ Run:
 """
 
 import asyncio
+import gzip
+import json
+import logging
 import sys
 import uuid
 
@@ -55,7 +58,7 @@ def check_public() -> None:
         assert is_public(path), path
     for path in ("/api/orders", "/api/portfolio", "/api/account/balance", "/api/notifications"):
         assert not is_public(path), path
-    ok("public whitelist covers auth, market data and the book — nothing else")
+    ok("public whitelist covers auth, market data and the book - nothing else")
 
 
 def check_internal_blocked() -> None:
@@ -86,15 +89,14 @@ async def check_proxy_passthrough() -> None:
 
     def handle(request: httpx.Request) -> httpx.Response:
         seen.append(request)
+        # A genuinely gzipped upstream response. httpx decompresses it, so the
+        # gateway must NOT forward content-encoding or the browser would try to
+        # gunzip plain bytes.
+        body = gzip.compress(json.dumps({"detail": "insufficient buying power"}).encode())
         return httpx.Response(
             409,
-            json={"detail": "insufficient buying power"},
-            headers={
-                "content-type": "application/json",
-                # httpx decodes the body, so this header must NOT be forwarded
-                # or the browser tries to gunzip plain bytes.
-                "content-encoding": "gzip",
-            },
+            content=body,
+            headers={"content-type": "application/json", "content-encoding": "gzip"},
         )
 
     stub = httpx.AsyncClient(transport=httpx.MockTransport(handle))
@@ -127,7 +129,7 @@ async def check_proxy_passthrough() -> None:
         ok("upstream 409 and its detail reach the client untouched, with a request id")
 
         assert "content-encoding" not in {k.lower() for k in r.headers}, (
-            "content-encoding must be stripped — httpx already decompressed the body"
+            "content-encoding must be stripped - httpx already decompressed the body"
         )
         ok("content-encoding is not forwarded from the upstream")
 
@@ -175,6 +177,7 @@ async def check_proxy_passthrough() -> None:
 
 
 async def main() -> None:
+    logging.disable(logging.CRITICAL)  # importing the app enables JSON request logging
     check_routing()
     check_public()
     check_internal_blocked()
