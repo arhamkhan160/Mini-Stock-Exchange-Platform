@@ -15,9 +15,19 @@ cash balance, holdings, P&L and notifications.
 | 3 | Abidur Rahman Asif | 220042152 | Order Service · Matching Engine |
 | 4 | Mustain Billah Taj | 220042166 | Market Data Service · Portfolio Service |
 
-> **Status: in active development.** The shared contract (`libs/common/`) and the frontend shell
-> (`frontend/`) are committed. Individual services are being built in parallel — see the four team
-> documents linked below.
+> **Status: in active development.** The platform layer is in place — shared contract
+> (`libs/common/`), frontend shell, Docker Compose stack with PostgreSQL streaming replication,
+> the **API Gateway** and the **Notification Service**. The remaining five services are being built
+> in parallel by their owners.
+
+## Documentation
+
+| Document | Contents |
+|---|---|
+| [docs/architecture.md](docs/architecture.md) | System diagram, why each service is separate, every architectural pattern and its trade-offs |
+| [docs/use-cases.md](docs/use-cases.md) | Use-case diagram and per-use-case flows, including alternates |
+| [docs/sequence-place-order.md](docs/sequence-place-order.md) | The place-order saga, its compensating actions, and two-phase cancellation |
+| [docs/events.md](docs/events.md) | Event envelope, exact payloads, queue bindings, and the rules every consumer follows |
 
 ---
 
@@ -187,6 +197,29 @@ Expect one row in `streaming` state, and `t`.
 Cancellation is two-phase: the Order Service publishes `order.cancel_requested`, and the **Matching Engine** publishes the authoritative `order.cancelled` once the order is actually removed from the book. This is a deliberate refinement of the original design — only the book knows whether the order was still resting, so releasing funds any earlier would race against a simultaneous fill.
 
 ---
+
+## Proposal requirement → implementation
+
+| Requirement | Where it lives |
+|---|---|
+| API Gateway routing and cross-cutting concerns | [`services/gateway/app/routing.py`](services/gateway/app/routing.py), [`auth.py`](services/gateway/app/auth.py), [`ratelimit.py`](services/gateway/app/ratelimit.py) |
+| JWT authentication, OAuth2 password flow | [`libs/common/security.py`](libs/common/security.py) + User Service |
+| Rate limiting (Redis) | [`services/gateway/app/ratelimit.py`](services/gateway/app/ratelimit.py) — 30/min on order placement, fails open |
+| Synchronous inter-service REST | [`libs/common/http_client.py`](libs/common/http_client.py); `Order → Account`, `Order → Portfolio` |
+| Asynchronous event-driven communication | [`libs/common/events.py`](libs/common/events.py), [`docs/events.md`](docs/events.md) |
+| Database per service | 7 PostgreSQL containers in [`docker-compose.yml`](docker-compose.yml); one Alembic history per service |
+| **Master–slave replication** | [`infra/postgres/primary/init-replication.sh`](infra/postgres/primary/init-replication.sh), [`replica/setup-replica.sh`](infra/postgres/replica/setup-replica.sh); read/write split in the Market Data service |
+| Distributed locking (Redis) | [`libs/common/redis_client.py`](libs/common/redis_client.py) — `SET NX PX` + Lua compare-and-delete release |
+| Caching and Pub/Sub tick fan-out | `md:last_price:*`, `md:quote:*`, channel `md:ticks` |
+| Saga with compensating actions | Order Service place-order flow; [`docs/sequence-place-order.md`](docs/sequence-place-order.md) |
+| CQRS read projection | Portfolio Service, built from `trade.executed` |
+| Order matching (price–time priority) | Matching Engine, in-memory book per symbol |
+| WebSockets for live prices | Market Data `/ws/market`, bridged by [`services/gateway/app/ws_proxy.py`](services/gateway/app/ws_proxy.py) |
+| Service discovery | Docker Compose DNS on the `mse-net` network |
+| Notifications (mock email / in-app) | [`services/notification-service/`](services/notification-service/) |
+| SQLAlchemy + Alembic | [`libs/common/db.py`](libs/common/db.py); per-service `alembic/` |
+| Swagger / OpenAPI | FastAPI `/docs` on every service |
+| Containerisation | [`docker-compose.yml`](docker-compose.yml), one Dockerfile per service |
 
 ## Contributing (team)
 
