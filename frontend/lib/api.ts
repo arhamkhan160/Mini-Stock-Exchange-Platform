@@ -126,8 +126,10 @@ export const PortfolioAPI = {
 
 /* -------------------------------------------------------- notifications */
 export const NotificationAPI = {
-  list: (limit = 20, unreadOnly = false) =>
-    api<Notification[]>(`/api/notifications?limit=${limit}&unread_only=${unreadOnly}`),
+  list: (limit = 20, unreadOnly = false, offset = 0) =>
+    api<Notification[]>(
+      `/api/notifications?limit=${limit}&unread_only=${unreadOnly}&offset=${offset}`,
+    ),
   unreadCount: () => api<{ count: number }>("/api/notifications/unread-count"),
   markRead: (id: string) => post<void>(`/api/notifications/${id}/read`),
   markAllRead: () => post<{ marked: number }>("/api/notifications/read-all"),
