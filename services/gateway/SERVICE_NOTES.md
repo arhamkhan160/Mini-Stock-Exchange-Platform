@@ -1,0 +1,106 @@
+# API Gateway — service notes
+
+**Port 8000 · no database · owner: Arham Ibrahim Khan (Team A)**
+
+The single entry point for the frontend. Cross-cutting concerns live here so no
+business service repeats them: routing, JWT validation, rate limiting, request
+ids, CORS, and the WebSocket bridge for live ticks.
+
+## Routing
+
+Rule: **strip `/api`, keep the rest of the path and the query string.** Longest
+matching prefix wins, so a shorter entry added later cannot shadow an existing
+one.
+
+| Public prefix | Upstream |
+|---|---|
+| `/api/auth`, `/api/users` | user-service:8001 |
+| `/api/account` | account-service:8002 |
+| `/api/orders` | order-service:8003 |
+| `/api/book` | matching-engine:8004 |
+| `/api/market` | market-data-service:8005 |
+| `/api/portfolio` | portfolio-service:8006 |
+| `/api/notifications` | notification-service:8007 |
+| `WS /ws/market` | market-data-service:8005 `/ws/market` |
+
+`GET /health` (liveness, no dependencies) and `GET /ready` (Redis + JWT
+fingerprint + route list) are served by the gateway itself.
+
+## Authentication
+
+Public prefixes: `/api/auth/`, `/api/market/`, `/api/book/`. Public exact paths:
+`/health`, `/ready`, `/docs`, `/openapi.json`, `/redoc`, `/ws/market`, `/`.
+Everything else needs a valid `Authorization: Bearer <jwt>`.
+
+The gateway validates the token **and forwards the header unchanged** — every
+downstream service validates it again. Defence in depth: no service is
+reachable-but-unprotected for anything already on the Docker network.
+
+A valid token on a *public* route is still decoded, because it upgrades the
+rate-limit identity from per-IP to per-user. An invalid token there is ignored.
+
+**`/internal/*` is answered with 404** — not 403, which would confirm the
+endpoints exist. Internal service-to-service endpoints are reachable only from
+inside the Docker network, guarded by `X-Internal-Key`.
+
+## Rate limiting
+
+Redis fixed window, `ratelimit:{identity}:{minute}` with a 60-second expiry.
+Identity is the user id when authenticated, otherwise the client IP.
+
+| Scope | Limit / minute |
+|---|---|
+| `POST /api/orders` | 30 |
+| Everything else | 120 |
+| Accounts whose email ends `@mse.local` (seed bots, market maker) | 1200 |
+
+**Fails open.** If Redis is unavailable the request is allowed and a warning is
+logged at most once a minute. Rate limiting is not a correctness feature, and
+taking the exchange down because Redis blinked is the worse outage.
+
+## Proxy behaviour
+
+- One shared `httpx.AsyncClient` for the process — a client per request leaks
+  sockets and exhausts ephemeral ports under the market maker's load.
+- Timeouts: 15 s total, 5 s connect. `ConnectError` → **503**,
+  `TimeoutException` → **504**, both with a readable `detail`.
+- Hop-by-hop headers are stripped both ways, including `content-length`
+  (httpx recomputes it; forwarding a stale value truncates the response).
+- **Upstream status codes and bodies pass through untouched** — a 409 with
+  `"insufficient buying power"` must reach the browser intact or the trading
+  path is undebuggable.
+- `X-Request-Id` is generated when absent, forwarded upstream, and echoed back.
+- `X-User-Id` is added for downstream logging (services still trust only the JWT).
+- `OPTIONS` preflight is answered at the edge, never proxied.
+
+## WebSocket bridge
+
+`/ws/market` opens an upstream socket to market-data and runs two pump tasks;
+the first to finish cancels the other. A failure closes the client socket rather
+than leaving it hanging.
+
+If the bridge ever misbehaves during the demo, the frontend can talk to
+market-data directly by changing `NEXT_PUBLIC_WS_URL` — one env var, no code
+change.
+
+## Known limitations
+
+- Responses are buffered, not streamed. Fine for candle payloads (hundreds of
+  KB at most); a large file download would need `client.stream()`.
+- The rate-limit window is fixed, not sliding, so a burst can straddle a minute
+  boundary and briefly allow up to 2× the limit. Acceptable for this workload.
+- No circuit breaker: a permanently down upstream is retried on every request
+  and simply returns 503 each time.
+
+## Self-check
+
+```powershell
+# from services/gateway
+$env:PYTHONPATH=".;../../libs"
+python selfcheck.py
+```
+
+Covers routing and prefix precedence, the public whitelist, `/internal/`
+blocking, per-route limits and bot exemption, and — through the real ASGI app
+with a stubbed upstream — 409 passthrough, 401 on protected routes, 404 for
+internal paths, and dependency-free `/health`.
