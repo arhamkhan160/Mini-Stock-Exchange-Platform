@@ -1,0 +1,2 @@
+# Static assets (favicon, images) go here.
+# Kept in git so the Docker build's `COPY /app/public` step always has a target.

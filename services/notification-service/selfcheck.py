@@ -17,7 +17,7 @@ import sys
 import uuid
 
 import httpx
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, text
 
 from common.db import Base
 from common.events import ORDER_CANCELLED, ORDER_REJECTED, TRADE_EXECUTED, envelope
@@ -44,9 +44,25 @@ def ok(label: str) -> None:
     print(f"  OK  {label}")
 
 
+INITIAL_REVISION = "0001"
+
+
 async def reset() -> None:
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        # create_all builds the schema without Alembic's knowledge, so a later
+        # `alembic upgrade head` (which the container runs on boot) would fail
+        # with "relation already exists". Stamping the version here makes the
+        # two paths compatible in either order.
+        await conn.execute(
+            text("CREATE TABLE IF NOT EXISTS alembic_version "
+                 "(version_num VARCHAR(32) NOT NULL PRIMARY KEY)")
+        )
+        await conn.execute(
+            text("INSERT INTO alembic_version (version_num) VALUES (:rev) "
+                 "ON CONFLICT (version_num) DO NOTHING"),
+            {"rev": INITIAL_REVISION},
+        )
     async with SessionLocal() as s:
         await s.execute(delete(Notification))
         await s.execute(delete(ProcessedEvent))

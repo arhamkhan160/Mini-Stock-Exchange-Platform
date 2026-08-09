@@ -98,6 +98,15 @@ def build_gateway(handler=None, redis=None):
     except ModuleNotFoundError as exc:
         raise Skip(f"needs {exc.name} (gateway app could not be imported)")
 
+    # The circuit breaker and bulkhead keep module-level state, so one check
+    # tripping a circuit would fast-fail every later check against the same
+    # upstream. Each test gets a clean gateway.
+    from app import proxy as gateway_proxy
+
+    gateway_proxy._failures.clear()
+    gateway_proxy._open_until.clear()
+    gateway_proxy._bulkheads.clear()
+
     seen: list = []
 
     def default_handler(request):

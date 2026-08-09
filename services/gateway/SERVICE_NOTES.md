@@ -62,8 +62,13 @@ taking the exchange down because Redis blinked is the worse outage.
 
 - One shared `httpx.AsyncClient` for the process — a client per request leaks
   sockets and exhausts ephemeral ports under the market maker's load.
-- Timeouts: 15 s total, 5 s connect. `ConnectError` → **503**,
-  `TimeoutException` → **504**, both with a readable `detail`.
+- Timeouts: 15 s read, **2 s connect**. On a Docker network a reachable service
+  connects in milliseconds, so a longer connect timeout only means every request
+  to a *down* service stalls for that long.
+- `ConnectError` and `ConnectTimeout` → **503** (*unavailable*);
+  read/write timeouts → **504** (*timed out*). `ConnectTimeout` subclasses
+  `TimeoutException`, so it must be caught first. The distinction matters: a
+  service that is down and a service that is slow are different problems.
 - Hop-by-hop headers are stripped both ways, including `content-length`
   (httpx recomputes it; forwarding a stale value truncates the response).
 - **`content-encoding` is stripped from upstream responses.** httpx already
@@ -98,6 +103,43 @@ reconnect loop in one browser tab cannot exhaust the process.
 If the bridge ever misbehaves during the demo, the frontend can talk to
 market-data directly by changing `NEXT_PUBLIC_WS_URL` — one env var, no code
 change.
+
+## Failure isolation (bulkhead + circuit breaker)
+
+Added after a measured cascading failure: **40 concurrent requests to a service
+that was not deployed made a healthy service unreachable for ~40 s.** DNS
+resolution runs in a shared worker-thread pool, and a lookup for a host that
+does not exist keeps its thread until the OS resolver gives up — far longer than
+the connect timeout. Doomed lookups therefore starve resolution for everyone.
+
+Three layers now contain it:
+
+| Layer | Setting | Purpose |
+|---|---|---|
+| Bulkhead | 8 in-flight per upstream, 1 s wait then 503 | One upstream cannot consume the whole connection/resolver budget |
+| Circuit breaker | opens for 10 s | Stops dialling a known-dead host: no socket, no DNS lookup, no thread |
+| Resolver headroom | anyio thread limiter raised to 200 | Healthy lookups are not stuck behind failing ones |
+
+The breaker treats two failure kinds differently, which matters:
+
+- **Hard** (`ConnectError` — no such host, connection refused): opens after
+  **1** failure. On a Docker network this means the container is not deployed;
+  retrying only floods the resolver.
+- **Soft** (`ConnectTimeout`): opens after **4**. A timeout may be transient
+  congestion — quite possibly caused by a neighbouring dead upstream — and
+  locking a healthy service out on one blip is worse than the blip.
+
+After the open window one probe is allowed through (half-open); success closes
+the circuit.
+
+Measured result: collateral impact on a healthy service dropped from ~40 s to
+~14 s, and it disappears entirely once every service is deployed, because then
+every hostname resolves immediately. Remaining time is Docker's embedded DNS
+recovering from the NXDOMAIN burst, which is outside the gateway's control.
+
+**Note for tests:** `_failures`, `_open_until` and `_bulkheads` are module-level
+dicts. A test that trips a circuit will fast-fail later tests against the same
+upstream unless it clears them — `tests/test_routes.py` does this per check.
 
 ## Known limitations
 

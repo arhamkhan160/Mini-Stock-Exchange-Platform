@@ -1,0 +1,11 @@
+# The frontend build context is ./frontend, so the repo-root .dockerignore does
+# not apply here. Without this, `COPY . .` overwrites the Linux node_modules
+# that `npm ci` just installed with the host's Windows build.
+node_modules
+.next
+out
+.env.local
+*.tsbuildinfo
+Dockerfile
+.dockerignore
+npm-debug.log*

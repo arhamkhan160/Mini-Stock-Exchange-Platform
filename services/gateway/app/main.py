@@ -39,10 +39,23 @@ def _secret_fingerprint() -> str:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # DNS resolution runs in anyio's worker threads, and a lookup for a host
+    # that does not exist keeps its thread until the OS resolver gives up —
+    # far longer than our connect timeout. With the default pool of 40, a burst
+    # aimed at one down service starves resolution for every OTHER service and
+    # healthy upstreams start returning 503. Headroom here keeps a dead
+    # neighbour from becoming everyone's problem.
+    import anyio.to_thread
+
+    anyio.to_thread.current_default_thread_limiter().total_tokens = 200
+
     # ONE client for the whole process. Creating one per request leaks sockets
     # and exhausts ephemeral ports under the market-maker's load.
+    # connect=2s: on a Docker network a reachable service connects in
+    # milliseconds, so a longer connect timeout only means every request to a
+    # DOWN service stalls for that long. Read stays generous for slow queries.
     app.state.client = httpx.AsyncClient(
-        timeout=httpx.Timeout(15.0, connect=5.0),
+        timeout=httpx.Timeout(15.0, connect=2.0),
         follow_redirects=False,
         limits=httpx.Limits(max_connections=200, max_keepalive_connections=50),
     )
