@@ -1,0 +1,27 @@
+# Canonical pinned dependency set. EVERY Python service uses exactly these
+# versions. Each service's requirements.txt starts with:
+#     -r ../../requirements-base.txt
+# and then adds only what is genuinely extra for that service.
+#
+# Do not bump versions during the 24h build. The pins below are known to work
+# together (notably: bcrypt is used directly, NOT via passlib, because
+# passlib 1.7.4 crashes against bcrypt >= 4.1).
+
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+pydantic==2.10.4
+pydantic-settings==2.7.0
+python-multipart==0.0.20
+
+sqlalchemy==2.0.36
+asyncpg==0.30.0
+psycopg2-binary==2.9.10
+alembic==1.14.0
+
+aio-pika==9.5.4
+redis==5.2.1
+httpx==0.28.1
+websockets==14.1
+
+PyJWT==2.10.1
+bcrypt==4.2.1
