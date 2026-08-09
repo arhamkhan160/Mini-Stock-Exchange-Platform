@@ -42,7 +42,7 @@ services:
     environment:
       <<: *pg-env
       POSTGRES_DB: user_db
-    ports: ["5433:5432"]
+    ports: ["127.0.0.1:5433:5432"]
     volumes: [pg-user:/var/lib/postgresql/data]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d user_db"]
@@ -56,7 +56,7 @@ services:
     environment:
       <<: *pg-env
       POSTGRES_DB: account_db
-    ports: ["5434:5432"]
+    ports: ["127.0.0.1:5434:5432"]
     volumes: [pg-account:/var/lib/postgresql/data]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d account_db"]
@@ -70,7 +70,7 @@ services:
     environment:
       <<: *pg-env
       POSTGRES_DB: order_db
-    ports: ["5435:5432"]
+    ports: ["127.0.0.1:5435:5432"]
     volumes: [pg-order:/var/lib/postgresql/data]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d order_db"]
@@ -87,7 +87,7 @@ services:
       POSTGRES_DB: market_db
       REPLICATION_USER: ${REPLICATION_USER}
       REPLICATION_PASSWORD: ${REPLICATION_PASSWORD}
-    ports: ["5436:5432"]
+    ports: ["127.0.0.1:5436:5432"]
     volumes:
       - pg-market-primary:/var/lib/postgresql/data
       - ./infra/postgres/primary/init-replication.sh:/docker-entrypoint-initdb.d/init-replication.sh:ro
@@ -109,7 +109,7 @@ services:
       PGDATA: /var/lib/postgresql/data
     user: postgres
     entrypoint: ["/bin/bash", "/setup-replica.sh"]
-    ports: ["5437:5432"]
+    ports: ["127.0.0.1:5437:5432"]
     volumes:
       - pg-market-replica:/var/lib/postgresql/data
       - ./infra/postgres/replica/setup-replica.sh:/setup-replica.sh:ro
@@ -129,7 +129,7 @@ services:
     environment:
       <<: *pg-env
       POSTGRES_DB: portfolio_db
-    ports: ["5438:5432"]
+    ports: ["127.0.0.1:5438:5432"]
     volumes: [pg-portfolio:/var/lib/postgresql/data]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d portfolio_db"]
@@ -143,7 +143,7 @@ services:
     environment:
       <<: *pg-env
       POSTGRES_DB: notification_db
-    ports: ["5439:5432"]
+    ports: ["127.0.0.1:5439:5432"]
     volumes: [pg-notification:/var/lib/postgresql/data]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d notification_db"]
@@ -159,7 +159,7 @@ services:
     container_name: mse-redis
     restart: unless-stopped
     command: ["redis-server", "--appendonly", "yes"]
-    ports: ["6379:6379"]
+    ports: ["127.0.0.1:6379:6379"]
     volumes: [redis-data:/data]
     networks: [mse-net]
     healthcheck:
@@ -176,8 +176,8 @@ services:
       RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER}
       RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS}
     ports:
-      - "5672:5672"     # AMQP
-      - "15672:15672"   # management UI
+      - "127.0.0.1:5672:5672"     # AMQP
+      - "127.0.0.1:15672:15672"   # management UI
     volumes: [rabbitmq-data:/var/lib/rabbitmq]
     networks: [mse-net]
     healthcheck:
@@ -198,7 +198,7 @@ services:
       <<: *common-env
       SERVICE_NAME: gateway
       SERVICE_PORT: 8000
-    ports: ["8000:8000"]
+    ports: ["127.0.0.1:8000:8000"]
     networks: [mse-net]
     depends_on:
       redis: { condition: service_healthy }
@@ -218,7 +218,7 @@ services:
       SERVICE_NAME: user-service
       SERVICE_PORT: 8001
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres-user:5432/user_db
-    ports: ["8001:8001"]
+    ports: ["127.0.0.1:8001:8001"]
     networks: [mse-net]
     depends_on:
       postgres-user: { condition: service_healthy }
@@ -240,7 +240,7 @@ services:
       SERVICE_NAME: account-service
       SERVICE_PORT: 8002
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres-account:5432/account_db
-    ports: ["8002:8002"]
+    ports: ["127.0.0.1:8002:8002"]
     networks: [mse-net]
     depends_on:
       postgres-account: { condition: service_healthy }
@@ -262,7 +262,7 @@ services:
       SERVICE_NAME: order-service
       SERVICE_PORT: 8003
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres-order:5432/order_db
-    ports: ["8003:8003"]
+    ports: ["127.0.0.1:8003:8003"]
     networks: [mse-net]
     depends_on:
       postgres-order: { condition: service_healthy }
@@ -284,7 +284,7 @@ services:
       <<: *common-env
       SERVICE_NAME: matching-engine
       SERVICE_PORT: 8004
-    ports: ["8004:8004"]
+    ports: ["127.0.0.1:8004:8004"]
     networks: [mse-net]
     depends_on:
       redis: { condition: service_healthy }
@@ -307,7 +307,7 @@ services:
       # writes -> primary, chart/history reads -> replica
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres-market-primary:5432/market_db
       DATABASE_REPLICA_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres-market-replica:5432/market_db
-    ports: ["8005:8005"]
+    ports: ["127.0.0.1:8005:8005"]
     networks: [mse-net]
     depends_on:
       postgres-market-primary: { condition: service_healthy }
@@ -330,7 +330,7 @@ services:
       SERVICE_NAME: portfolio-service
       SERVICE_PORT: 8006
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres-portfolio:5432/portfolio_db
-    ports: ["8006:8006"]
+    ports: ["127.0.0.1:8006:8006"]
     networks: [mse-net]
     depends_on:
       postgres-portfolio: { condition: service_healthy }
@@ -352,7 +352,7 @@ services:
       SERVICE_NAME: notification-service
       SERVICE_PORT: 8007
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres-notification:5432/notification_db
-    ports: ["8007:8007"]
+    ports: ["127.0.0.1:8007:8007"]
     networks: [mse-net]
     depends_on:
       postgres-notification: { condition: service_healthy }
@@ -375,7 +375,7 @@ services:
         NEXT_PUBLIC_WS_URL: ${NEXT_PUBLIC_WS_URL}
     container_name: mse-frontend
     restart: unless-stopped
-    ports: ["3000:3000"]
+    ports: ["127.0.0.1:3000:3000"]
     networks: [mse-net]
     depends_on:
       gateway: { condition: service_healthy }

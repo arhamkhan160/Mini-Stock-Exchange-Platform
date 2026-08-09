@@ -168,6 +168,14 @@ python scripts/smoke_test.py
 | Swagger (per service) | http://localhost:8001/docs … http://localhost:8007/docs |
 | RabbitMQ management | http://localhost:15672 (guest / guest) |
 
+Every published port is bound to `127.0.0.1`, so the stack is reachable from your machine only.
+Redis runs without a password and RabbitMQ uses its default credentials — on a shared network an
+unbound port would expose both. Drop the `127.0.0.1:` prefix on a port in `docker-compose.yml` if
+you deliberately need to reach it from another machine.
+
+The credentials in `.env.example` are development defaults, created by the containers themselves on
+first boot. Production would inject them from a secrets manager instead.
+
 Verify the master–slave replication:
 
 ```bash
