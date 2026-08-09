@@ -264,7 +264,7 @@ Seed the 8 `symbols` rows from `common.symbols` on startup if the table is empty
 ## 2.3 The `trade.executed` handler (write path — primary only)
 ```python
 async def handle_trade(env):
-    if await already_processed(redis, "marketdata", env["event_id"]): return
+    if await seen_event(redis, "marketdata", env["event_id"]): return   # read-only
     try:
         p     = env["payload"]
         sym   = normalize_symbol(p["symbol"])
@@ -280,8 +280,7 @@ async def handle_trade(env):
         await redis.publish("md:ticks", json.dumps({"symbol": sym, "price": money_str(price),
                                                      "quantity": qty, "ts": int(ts.timestamp())}))
     except Exception:
-        await clear_processed(redis, "marketdata", env["event_id"])   # let the retry re-run
-        raise
+        raise   # the processed_events PK is the authority; see the idempotency rule below
 ```
 
 `floor_bucket(ts, minutes)` — **always UTC**:
@@ -457,7 +456,7 @@ unrealized   = (mark - avg_cost) * quantity
 ## 3.4 Event handlers
 ```
 trade.executed:
-  if already_processed(redis,"portfolio",event_id): return
+  if await seen_event(redis,"portfolio",event_id): return   # read-only check
   lock lock:shares:{buyer_user_id}:{symbol}  -> apply BUY fill (create the holding if absent)
   lock lock:shares:{seller_user_id}:{symbol} -> apply SELL fill, consume the share reservation
                                                 for sell_order_id, release the remainder when
@@ -468,7 +467,37 @@ trade.executed:
 order.cancelled / order.rejected:
   release the share reservation for order_id if one exists (BUY orders have none -> 200, released 0)
 ```
-On any exception call `clear_processed(redis, "portfolio", event_id)` before re-raising.
+Insert `ProcessedEvent(event_id)` inside the SAME transaction as the holdings updates, and call `mark_event_processed(redis, "portfolio", event_id)` only AFTER the commit.
+
+**Idempotency is DATABASE-FIRST — Redis is only a cache.** The authority is the
+`processed_events` primary key, inserted in the SAME transaction as the work.
+The Redis marker is READ before the work and WRITTEN only after the commit:
+
+```python
+if await seen_event(redis, "portfolio", env["event_id"]):   # read-only check
+    return
+
+async with SessionLocal() as session:
+    ...apply the event...
+    session.add(ProcessedEvent(event_id=uuid.UUID(env["event_id"])))
+    try:
+        await session.commit()
+    except IntegrityError:            # another delivery won the race
+        await session.rollback()
+        return
+
+await mark_event_processed(redis, "portfolio", env["event_id"])   # AFTER commit
+```
+
+Never `SET NX` before the work: a crash between the claim and the commit leaves a
+marker for work that never happened, the redelivery sees "already processed",
+acks, and the event is silently lost. A read-only check can only cause a
+redundant retry, which the primary key stops. Prefer a duplicate over a loss.
+
+A raising handler does not block its queue — `common.events.Broker` sends the
+message to `<queue>.retry` (5 s TTL, dead-letters back to the source queue) and
+gives up to `exchange.events.dead` after 5 attempts.
+
 
 ## 3.5 Edge cases — Portfolio
 
