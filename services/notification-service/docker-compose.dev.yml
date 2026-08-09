@@ -1,0 +1,23 @@
+# Local dependencies for developing the Notification Service on its own.
+#   docker compose -f docker-compose.dev.yml up -d
+#   (from the repo root, PowerShell)
+#   $env:PYTHONPATH=".;./libs"
+#   $env:DATABASE_URL="postgresql+asyncpg://mse:mse_pw@localhost:5439/notification_db"
+#   $env:SERVICE_PORT="8007"
+#   uvicorn app.main:app --reload --port 8007
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: mse
+      POSTGRES_PASSWORD: mse_pw
+      POSTGRES_DB: notification_db
+    ports: ["5439:5432"]
+
+  redis:
+    image: redis:7-alpine
+    ports: ["6379:6379"]
+
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    ports: ["5672:5672", "15672:15672"]
