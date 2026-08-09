@@ -116,15 +116,16 @@ async def proxy(request: Request, upstream_path: str) -> Response:
     # 3. Authenticate (raises 401 on a protected path without a valid token).
     claims = authenticate(request)
 
-    # 4. Rate limit, keyed per user when known, otherwise per client IP.
-    identity = claims.get("sub") if claims else (request.client.host if request.client else "anonymous")
-    await enforce(app.state.redis, str(identity), limit_for(request.method, path, claims))
-
-    # 5. Route.
+    # 4. Route BEFORE rate limiting, so a typo in a URL does not burn the
+    #    caller's quota.
     route = resolve(path)
     if route is None:
         return JSONResponse({"detail": "no route"}, status_code=404)
     upstream_base, forwarded_path = route
+
+    # 5. Rate limit, keyed per user when known, otherwise per client IP.
+    identity = claims.get("sub") if claims else (request.client.host if request.client else "anonymous")
+    await enforce(app.state.redis, str(identity), limit_for(request.method, path, claims))
 
     request_id = request.headers.get("x-request-id") or str(uuid.uuid4())
     extra = {"X-Request-Id": request_id}

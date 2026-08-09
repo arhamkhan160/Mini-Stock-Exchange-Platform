@@ -72,20 +72,51 @@ async def distributed_lock(
             log.exception("failed releasing lock %s (it will expire in %sms)", key, ttl_ms)
 
 
-async def already_processed(redis: aioredis.Redis, service: str, event_id: str, ttl: int = 86400) -> bool:
-    """Idempotency guard. Returns True if this event_id was already handled.
+async def seen_event(redis: aioredis.Redis, service: str, event_id: str) -> bool:
+    """Fast-path duplicate check. READ ONLY — it never claims the event.
 
-    Call it FIRST in every event handler:
-        if await already_processed(r, "portfolio", env["event_id"]): return
+    Redis is a cache here, not the authority. The authority is the
+    `processed_events` primary key, written inside the same transaction as the
+    work itself.
+
+    Why not SET NX: claiming the event before the work commits means a crash
+    between the claim and the commit makes the event look "already handled"
+    forever, and it is silently dropped on redelivery. A read-only check can
+    only ever cause a redundant retry, which the database catches.
+
+    Handler shape:
+
+        if await seen_event(r, "portfolio", env["event_id"]):
+            return
+        try:
+            ...work...                       # same transaction as:
+            session.add(ProcessedEvent(event_id=...))
+            await session.commit()
+        except IntegrityError:               # another delivery won the race
+            await session.rollback()
+            return
+        await mark_event_processed(r, "portfolio", env["event_id"])
     """
     if not event_id:
         return False
-    was_set = await redis.set(f"idem:{service}:{event_id}", "1", nx=True, ex=ttl)
-    return not bool(was_set)
+    return bool(await redis.exists(f"idem:{service}:{event_id}"))
 
 
-async def clear_processed(redis: aioredis.Redis, service: str, event_id: str) -> None:
-    """Undo the idempotency marker when a handler fails, so the retry can run."""
+async def mark_event_processed(
+    redis: aioredis.Redis, service: str, event_id: str, ttl: int = 86400
+) -> None:
+    """Record the fast-path marker. Call AFTER the work is durably committed.
+
+    Losing this write is harmless: the next delivery simply does one extra
+    database round-trip and is stopped by the primary key.
+    """
+    if event_id:
+        await redis.set(f"idem:{service}:{event_id}", "1", ex=ttl)
+
+
+async def forget_event(redis: aioredis.Redis, service: str, event_id: str) -> None:
+    """Drop the marker. Only needed by services with no database of their own
+    (the Matching Engine), which cannot fall back to a primary key."""
     if event_id:
         await redis.delete(f"idem:{service}:{event_id}")
 

@@ -66,6 +66,17 @@ taking the exchange down because Redis blinked is the worse outage.
   `TimeoutException` → **504**, both with a readable `detail`.
 - Hop-by-hop headers are stripped both ways, including `content-length`
   (httpx recomputes it; forwarding a stale value truncates the response).
+- **`content-encoding` is stripped from upstream responses.** httpx already
+  decompressed the body, so forwarding it would tell the browser to gunzip
+  plain bytes.
+- **`X-Internal-Key` and `X-User-Id` are stripped from client requests.** The
+  first guards every `/internal/` endpoint and the second is what services log
+  as the caller; accepting either from outside would let a client forge both.
+  The gateway sets `X-User-Id` itself from verified JWT claims.
+- The **raw query string** is forwarded, not `dict(query_params)`, which would
+  silently keep only the last value of a repeated key.
+- Rate limiting happens **after** routing, so a mistyped URL does not burn the
+  caller's quota.
 - **Upstream status codes and bodies pass through untouched** — a 409 with
   `"insufficient buying power"` must reach the browser intact or the trading
   path is undebuggable.
@@ -78,6 +89,11 @@ taking the exchange down because Redis blinked is the worse outage.
 `/ws/market` opens an upstream socket to market-data and runs two pump tasks;
 the first to finish cancels the other. A failure closes the client socket rather
 than leaving it hanging.
+
+The feed is public and unauthenticated, and these connections never reach the
+HTTP rate limiter, so they have their own ceiling: **200 concurrent in total,
+5 per client IP**, refused with close code 1013 (*try again later*). A runaway
+reconnect loop in one browser tab cannot exhaust the process.
 
 If the bridge ever misbehaves during the demo, the frontend can talk to
 market-data directly by changing `NEXT_PUBLIC_WS_URL` — one env var, no code

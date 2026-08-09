@@ -33,13 +33,17 @@ A side is `ORDER_FILLED` only when its `*_remaining` is 0, otherwise `ORDER_PART
 
 ## Edge cases handled
 
-1. **Duplicate events** — two layers: a Redis `SET NX` marker and the
-   `processed_events` primary key. Redis alone is not enough because it can be
-   flushed; the self-check proves the DB layer catches that case.
-2. **Failed handler** clears the Redis marker before re-raising, so the broker
-   retry actually re-runs the work instead of silently skipping it.
-3. **Poison messages** dead-letter automatically after 5 attempts via
-   `common.events.Broker` — no retry loop here.
+1. **Duplicate events** — idempotency is **database-first**. The authority is
+   the `processed_events` primary key, inserted in the same transaction as the
+   notifications. Redis is only a fast path and is written *after* the commit,
+   so a crash mid-handler can never make unprocessed work look processed. The
+   self-check proves the DB layer still catches a replay after a Redis flush.
+2. **Side effects after the commit** (the mock email) cannot fail the handler.
+   The work is already durable, so a retry would redo nothing and simply
+   re-fail; the email error is logged and swallowed.
+3. **Poison messages** go to `q.notification.*.retry` for 5 s and then back to
+   the source queue, dead-lettering after 5 attempts. RabbitMQ does the waiting,
+   so a failing handler never blocks its queue — no retry loop here.
 4. **User Service unreachable** — the email lookup falls back to logging the
    user id. `retries=0`, 3 s timeout: an alert must never block on it.
 5. **Long reject reasons** are truncated to 500 chars before insert.

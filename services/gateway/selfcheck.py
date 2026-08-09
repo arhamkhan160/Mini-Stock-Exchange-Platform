@@ -82,15 +82,22 @@ async def check_proxy_passthrough() -> None:
     """A 409 with a `detail` body must survive the proxy unchanged."""
     from app import main as gateway_main
 
-    stub = httpx.AsyncClient(
-        transport=httpx.MockTransport(
-            lambda request: httpx.Response(
-                409,
-                json={"detail": "insufficient buying power"},
-                headers={"content-type": "application/json"},
-            )
+    seen: list[httpx.Request] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(
+            409,
+            json={"detail": "insufficient buying power"},
+            headers={
+                "content-type": "application/json",
+                # httpx decodes the body, so this header must NOT be forwarded
+                # or the browser tries to gunzip plain bytes.
+                "content-encoding": "gzip",
+            },
         )
-    )
+
+    stub = httpx.AsyncClient(transport=httpx.MockTransport(handle))
 
     class FakeRedis:
         async def incr(self, *_a, **_k):
@@ -118,6 +125,39 @@ async def check_proxy_passthrough() -> None:
         assert r.json()["detail"] == "insufficient buying power", r.text
         assert "x-request-id" in {k.lower() for k in r.headers}, "request id must be returned"
         ok("upstream 409 and its detail reach the client untouched, with a request id")
+
+        assert "content-encoding" not in {k.lower() for k in r.headers}, (
+            "content-encoding must be stripped — httpx already decompressed the body"
+        )
+        ok("content-encoding is not forwarded from the upstream")
+
+        # A client must not be able to forge the internal auth header or the
+        # caller identity.
+        await client.post(
+            "/api/orders",
+            json={},
+            headers={
+                "Authorization": f"Bearer {token}",
+                "X-Internal-Key": "stolen-key",
+                "X-User-Id": "00000000-0000-0000-0000-000000000000",
+            },
+        )
+        forwarded = {k.lower(): v for k, v in seen[-1].headers.items()}
+        assert "x-internal-key" not in forwarded, "client-supplied X-Internal-Key must be stripped"
+        assert forwarded.get("x-user-id") != "00000000-0000-0000-0000-000000000000", (
+            "client-supplied X-User-Id must be overwritten by the gateway"
+        )
+        ok("client cannot forge X-Internal-Key or X-User-Id")
+
+        # dict(query_params) would keep only the last value.
+        await client.get(
+            "/api/orders?status=NEW&status=PARTIALLY_FILLED&limit=5",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        forwarded_query = str(seen[-1].url.query, "utf-8")
+        assert forwarded_query.count("status=") == 2, f"repeated query keys lost: {forwarded_query}"
+        assert "limit=5" in forwarded_query
+        ok("repeated query parameters survive the proxy")
 
         r = await client.post("/api/orders", json={})
         assert r.status_code == 401, r.status_code

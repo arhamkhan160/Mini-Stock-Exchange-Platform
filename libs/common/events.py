@@ -92,6 +92,9 @@ Q_NOTIFICATION_ORDER_CANCELLED = "q.notification.order_cancelled"
 Q_NOTIFICATION_ORDER_REJECTED = "q.notification.order_rejected"
 
 MAX_DELIVERY_ATTEMPTS = 5
+# Failed messages wait here before returning to their source queue. RabbitMQ
+# does the waiting (queue TTL + dead-letter), so no consumer is ever blocked.
+RETRY_DELAY_MS = 5000
 
 log = logging.getLogger(__name__)
 
@@ -169,13 +172,61 @@ class Broker:
 
     async def consume(self, queue_name: str, routing_keys: list[str], handler) -> None:
         """handler: async def(envelope: dict) -> None.
-        Raising from the handler retries the message (up to MAX_DELIVERY_ATTEMPTS)
-        and then dead-letters it, so one poison message can never wedge a queue."""
+
+        A raising handler sends the message to `<queue>.retry`, which holds it
+        for RETRY_DELAY_MS and then dead-letters it back to the source queue.
+        After MAX_DELIVERY_ATTEMPTS it goes to the dead-letter exchange, so one
+        poison message can never wedge a queue.
+
+        Ordering matters: the retry copy is published BEFORE the original is
+        acked. A crash in between redelivers the original, which is a duplicate
+        — and every handler is idempotent, so a duplicate is harmless. Acking
+        first would lose the event outright.
+        """
         if self.channel is None or self.exchange is None:
             raise RuntimeError("broker not connected")
+
         queue = await self.channel.declare_queue(queue_name, durable=True)
         for key in routing_keys:
             await queue.bind(self.exchange, key)
+
+        # RabbitMQ does the waiting, not the consumer: messages expire out of
+        # this queue and are dead-lettered back to `queue_name`.
+        retry_queue_name = f"{queue_name}.retry"
+        await self.channel.declare_queue(
+            retry_queue_name,
+            durable=True,
+            arguments={
+                "x-message-ttl": RETRY_DELAY_MS,
+                "x-dead-letter-exchange": "",           # default exchange
+                "x-dead-letter-routing-key": queue_name,
+            },
+        )
+
+        async def _requeue_for_retry(message, attempts: int, event_id: str | None) -> None:
+            target_exchange = self.channel.default_exchange
+            routing_key = retry_queue_name
+            headers = {"x-attempts": attempts}
+
+            if attempts >= MAX_DELIVERY_ATTEMPTS:
+                target_exchange = self.dead_exchange
+                routing_key = queue_name
+                headers["x-origin-queue"] = queue_name
+                log.error(
+                    "dead-lettering %s after %s attempts, event_id=%s",
+                    queue_name, attempts, event_id,
+                )
+
+            await target_exchange.publish(
+                aio_pika.Message(
+                    body=message.body,
+                    headers=headers,
+                    content_type="application/json",
+                    delivery_mode=aio_pika.DeliveryMode.PERSISTENT,
+                    message_id=event_id,
+                ),
+                routing_key=routing_key,
+            )
 
         async def _on_message(message: aio_pika.abc.AbstractIncomingMessage) -> None:
             attempts = int((message.headers or {}).get("x-attempts", 0)) + 1
@@ -185,35 +236,28 @@ class Broker:
                 log.error("undecodable message on %s, dropping", queue_name)
                 await message.ack()
                 return
+
+            event_id = env.get("event_id")
             try:
                 await handler(env)
                 await message.ack()
+                return
             except Exception:
                 log.exception(
                     "handler failed on %s (attempt %s) event_id=%s",
-                    queue_name, attempts, env.get("event_id"),
-                )
-                await message.ack()  # remove original; we re-inject or dead-letter below
-                if attempts >= MAX_DELIVERY_ATTEMPTS:
-                    await self.dead_exchange.publish(
-                        aio_pika.Message(
-                            body=message.body,
-                            headers={"x-attempts": attempts, "x-origin-queue": queue_name},
-                            delivery_mode=aio_pika.DeliveryMode.PERSISTENT,
-                        ),
-                        routing_key=queue_name,
-                    )
-                    return
-                await asyncio.sleep(min(2 ** attempts, 10))
-                await self.channel.default_exchange.publish(
-                    aio_pika.Message(
-                        body=message.body,
-                        headers={"x-attempts": attempts},
-                        delivery_mode=aio_pika.DeliveryMode.PERSISTENT,
-                        message_id=env.get("event_id"),
-                    ),
-                    routing_key=queue_name,  # straight back onto this queue only
+                    queue_name, attempts, event_id,
                 )
 
+            try:
+                await _requeue_for_retry(message, attempts, event_id)
+            except Exception:
+                # Could not re-inject. Leave the message UNACKED so the broker
+                # redelivers it when this consumer or connection drops — losing
+                # it would be far worse than handling it twice.
+                log.exception("could not re-inject on %s, leaving unacked", queue_name)
+                return
+
+            await message.ack()
+
         await queue.consume(_on_message)
-        log.info("consuming %s <- %s", queue_name, routing_keys)
+        log.info("consuming %s <- %s (retry via %s)", queue_name, routing_keys, retry_queue_name)

@@ -110,27 +110,65 @@ strings. Timestamps are ISO-8601 UTC with a `Z` suffix.
 
 Inspect them live at <http://localhost:15672> (guest / guest).
 
-## Rules every consumer follows
+## Idempotency: database-first, Redis as a cache
 
-1. **Check idempotency first.**
-   ```python
-   if await already_processed(redis, "portfolio", env["event_id"]):
-       return
-   ```
-2. **Also guard in the database.** A `processed_events` primary key catches
-   replays after a Redis flush, which the Redis marker alone cannot.
-3. **Clear the marker on failure**, before re-raising:
-   ```python
-   except Exception:
-       await clear_processed(redis, "portfolio", env["event_id"])
-       raise
-   ```
-   Without this, a retried message is skipped as "already processed" and the
-   work is silently lost.
-4. **Never raise on an event you do not recognise.** Log it and acknowledge —
-   an unknown order id or symbol must not wedge the queue.
-5. **Open your own database session.** A request-scoped session is already
+The authority is the **`processed_events` primary key**, inserted in the *same
+transaction* as the work. Redis is only a fast path, and it is written **after**
+the commit.
+
+```python
+if await seen_event(redis, "portfolio", env["event_id"]):    # read-only check
+    return
+
+async with SessionLocal() as session:
+    ...apply the event...
+    session.add(ProcessedEvent(event_id=uuid.UUID(env["event_id"])))
+    try:
+        await session.commit()
+    except IntegrityError:          # another delivery won the race
+        await session.rollback()
+        return
+
+await mark_event_processed(redis, "portfolio", env["event_id"])   # after commit
+```
+
+**Why not `SET NX` before the work.** Claiming the event up front means a crash
+between the claim and the commit leaves a marker for work that never happened —
+the redelivery sees "already processed", acks, and the event is silently lost. A
+read-only check can only ever cause a redundant retry, and the primary key stops
+that. Prefer a duplicate attempt over a lost event, always.
+
+Losing the Redis write is harmless: the next delivery does one extra database
+round-trip and is stopped by the primary key.
+
+The Matching Engine has no database, so it dedupes in memory (`order_id` in the
+book index plus a bounded `seen_orders` set) and may use `forget_event`.
+
+## Other rules every consumer follows
+
+1. **Never raise on an event you do not recognise.** Log it and acknowledge — an
+   unknown order id or symbol must not wedge the queue.
+2. **Open your own database session.** A request-scoped session is already
    closed by the time a message arrives.
+3. **Side effects that follow a commit** (emails, cache writes) must not be able
+   to fail the handler — the work is already durable, so a retry would redo
+   nothing and simply re-fail.
+
+## Retry and dead-lettering
+
+A raising handler does **not** block its queue. The message is published to
+`<queue>.retry`, which holds it for 5 seconds via `x-message-ttl` and then
+dead-letters it back to the source queue. RabbitMQ does the waiting, so the
+consumer is free immediately.
+
+After `MAX_DELIVERY_ATTEMPTS` (5, tracked in the `x-attempts` header) the message
+goes to `exchange.events.dead`.
+
+The retry copy is published **before** the original is acked. A crash in between
+redelivers the original — a duplicate, which every handler is idempotent
+against. Acking first would lose the event outright. If the re-injection itself
+fails, the message is deliberately left unacked so the broker redelivers it when
+the consumer drops.
 
 ## Why `order.cancelled` comes from the Matching Engine
 

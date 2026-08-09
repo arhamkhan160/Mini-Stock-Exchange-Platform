@@ -311,7 +311,10 @@ services:
     networks: [mse-net]
     depends_on:
       postgres-market-primary: { condition: service_healthy }
-      postgres-market-replica: { condition: service_healthy }
+      # service_started, NOT service_healthy: the service falls back to the
+      # primary when the replica is unavailable, and gating startup on replica
+      # health would throw that resilience away.
+      postgres-market-replica: { condition: service_started }
       redis: { condition: service_healthy }
       rabbitmq: { condition: service_healthy }
     healthcheck:

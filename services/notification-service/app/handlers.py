@@ -17,7 +17,7 @@ import uuid
 from sqlalchemy.exc import IntegrityError
 
 from common.money import to_money
-from common.redis_client import already_processed, clear_processed
+from common.redis_client import mark_event_processed, seen_event
 
 from .deps import SERVICE, SessionLocal, redis
 from .emailer import send_mock_email
@@ -62,40 +62,50 @@ async def _handle(env: dict, build_notifications) -> None:
     """Shared idempotency + persistence wrapper.
 
     `build_notifications(payload)` returns a list of Notification rows.
+
+    Idempotency is database-first. Redis is only a fast path: it is read here
+    and written *after* the commit, so a crash mid-handler can never make an
+    unprocessed event look processed. The authority is the `processed_events`
+    primary key, inserted in the same transaction as the notifications.
     """
     event_id = env.get("event_id")
     event_type = env.get("event_type")
-    if await already_processed(redis, SERVICE, event_id):
+    if await seen_event(redis, SERVICE, event_id):
         log.debug("skipping duplicate event %s", event_id)
         return
 
-    try:
-        rows = build_notifications(env.get("payload") or {})
-        async with SessionLocal() as session:
-            for row in rows:
-                if row.user_id is None:
-                    log.error("dropping notification with unusable user_id, event %s", event_id)
-                    continue
-                session.add(row)
-            marker = _as_uuid(event_id)
-            if marker is not None:
-                session.add(ProcessedEvent(event_id=marker, event_type=event_type))
-            try:
-                await session.commit()
-            except IntegrityError:
-                # processed_events PK collision => another delivery already
-                # handled this event. Not an error; stop here.
-                await session.rollback()
-                log.debug("event %s already recorded in processed_events", event_id)
-                return
+    rows = build_notifications(env.get("payload") or {})
+    deliverable = []
+    for row in rows:
+        if row.user_id is None:
+            log.error("dropping notification with unusable user_id, event %s", event_id)
+        else:
+            deliverable.append(row)
 
-        for row in rows:
-            if row.user_id is not None:
-                await send_mock_email(row.user_id, row.title, row.message)
+    async with SessionLocal() as session:
+        for row in deliverable:
+            session.add(row)
+        marker = _as_uuid(event_id)
+        if marker is not None:
+            session.add(ProcessedEvent(event_id=marker, event_type=event_type))
+        try:
+            await session.commit()
+        except IntegrityError:
+            # processed_events PK collision => another delivery got there
+            # first. Not an error; the work is already durable.
+            await session.rollback()
+            log.debug("event %s already recorded in processed_events", event_id)
+            return
 
-    except Exception:
-        await clear_processed(redis, SERVICE, event_id)
-        raise
+    await mark_event_processed(redis, SERVICE, event_id)
+
+    # Mock email is a side effect of already-committed work. It must never
+    # fail the handler, or a retry would redo nothing and simply re-fail.
+    for row in deliverable:
+        try:
+            await send_mock_email(row.user_id, row.title, row.message)
+        except Exception:
+            log.exception("mock email failed for notification %s", row.id)
 
 
 # --------------------------------------------------------------------------- #

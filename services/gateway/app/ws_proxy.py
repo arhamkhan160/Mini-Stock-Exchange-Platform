@@ -11,6 +11,7 @@ market-data by changing NEXT_PUBLIC_WS_URL — one env var, no code change.
 import asyncio
 import contextlib
 import logging
+from collections import Counter
 
 import websockets
 from fastapi import WebSocket, WebSocketDisconnect
@@ -18,6 +19,18 @@ from fastapi import WebSocket, WebSocketDisconnect
 from common.config import settings
 
 log = logging.getLogger(__name__)
+
+# The tick feed is public and unauthenticated, so it needs its own ceiling —
+# the HTTP rate limiter never sees these connections. A runaway reconnect loop
+# in one browser tab must not be able to exhaust the process.
+MAX_TOTAL_CONNECTIONS = 200
+MAX_PER_CLIENT = 5
+
+_per_client: Counter[str] = Counter()
+
+
+def _client_key(ws: WebSocket) -> str:
+    return ws.client.host if ws.client else "unknown"
 
 
 def _upstream_url(query_string: str) -> str:
@@ -27,7 +40,14 @@ def _upstream_url(query_string: str) -> str:
 
 
 async def bridge_market(client_ws: WebSocket) -> None:
+    key = _client_key(client_ws)
+    if sum(_per_client.values()) >= MAX_TOTAL_CONNECTIONS or _per_client[key] >= MAX_PER_CLIENT:
+        log.warning("refusing market websocket from %s (at capacity)", key)
+        await client_ws.close(code=1013)  # 1013 = try again later
+        return
+
     await client_ws.accept()
+    _per_client[key] += 1
     query_string = client_ws.scope.get("query_string", b"").decode()
     url = _upstream_url(query_string)
 
@@ -57,5 +77,8 @@ async def bridge_market(client_ws: WebSocket) -> None:
         # A failed bridge must CLOSE the client socket, never leave it hanging.
         log.warning("market websocket bridge to %s failed", url, exc_info=True)
     finally:
+        _per_client[key] -= 1
+        if _per_client[key] <= 0:
+            del _per_client[key]  # keep the counter from growing per unique IP
         with contextlib.suppress(Exception):
             await client_ws.close()
