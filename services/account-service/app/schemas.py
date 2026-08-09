@@ -1,3 +1,4 @@
+import re
 import uuid
 from datetime import datetime
 from decimal import Decimal
@@ -7,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, field_validator
 from common.money import MoneyError, to_money
 
 MAX_DEPOSIT = Decimal("1000000.0000")
+DEPOSIT_AMOUNT_RE = re.compile(r"^\d+(\.\d{1,2})?$")  # dollars-and-cents, matches the frontend's validateAmount
 
 
 class Balance(BaseModel):
@@ -31,6 +33,8 @@ class DepositRequest(BaseModel):
             raise ValueError("amount must be positive")
         if val > MAX_DEPOSIT:
             raise ValueError(f"amount must be <= {MAX_DEPOSIT}")
+        if not DEPOSIT_AMOUNT_RE.match(v.strip()):
+            raise ValueError("amount must have at most 2 decimal places")
         return v
 
 
@@ -72,32 +76,13 @@ class ReservationRequest(BaseModel):
 class ReservationOut(BaseModel):
     order_id: str
     user_id: str
-    amount: str
-    status: str  # "HELD"
-
-
-class ReservationReleaseRequest(BaseModel):
-    # Omitted or null => release whatever remains for the order.
-    amount: str | None = None
-
-    @field_validator("amount")
-    @classmethod
-    def validate_amount(cls, v: str | None) -> str | None:
-        if v is None:
-            return v
-        try:
-            val = to_money(v)
-        except MoneyError as exc:
-            raise ValueError(str(exc))
-        if val <= 0:
-            raise ValueError("amount must be positive")
-        return v
+    amount_held: str
+    status: str
 
 
 class ReservationReleaseOut(BaseModel):
     order_id: str
-    released_amount: str
-    remaining_amount: str
+    released: str
 
 
 class HealthOut(BaseModel):

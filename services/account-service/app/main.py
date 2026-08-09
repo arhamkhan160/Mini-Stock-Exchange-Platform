@@ -10,8 +10,10 @@ import hashlib
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
 from common.config import settings
@@ -71,6 +73,18 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
+    """The shared contract (§1.6) reserves 422 for nothing — bad input is 400
+    everywhere. FastAPI's default is 422; this collapses it to the project's
+    `{"detail": "message"}` shape with the first failing field's message."""
+    errors = exc.errors()
+    msg = errors[0].get("msg", "validation error") if errors else "validation error"
+    if msg.startswith("Value error, "):
+        msg = msg[len("Value error, "):]
+    return JSONResponse(status_code=400, content={"detail": msg})
+
 
 app.include_router(router)
 

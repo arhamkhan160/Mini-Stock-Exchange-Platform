@@ -1,38 +1,51 @@
-"""Market-maker bot: registers a trading account and fires random LIMIT orders
-through the gateway, exactly like a real frontend user would. Needs Order
-Service running to actually accept anything — until then every POST /orders
-just 404s/503s, which this script logs and keeps going through.
+"""Market-maker bot: quotes both sides of the book for every symbol through
+the gateway, exactly like a real frontend user would — this doubles as an
+end-to-end integration test, and it's what makes the demo look alive (prices
+tick, candles move, fills generate notifications).
+
+Fixed identities (idempotent — re-running logs in instead of re-registering):
+    bot1..bot4 @mse.local / BotPassw0rd!   (market makers, $1,000,000 each)
+    demo@mse.local / DemoPassw0rd!          (a human-shaped account, $100,000)
+
+Each bot quotes 2 of the 8 symbols (round-robin), 5 bid levels + 5 ask
+levels, 50 shares each, in 0.1% steps off the last price. Rate limit: POST
+/api/orders is 30/min PER IDENTITY (gateway §1.6/1.8). 4 bots x 2 symbols x
+10 orders = 20 orders/bot/cycle; quotes are paced at ~1 every 2.2s (< 30/min
+with margin) rather than literally every 30s, which 20 orders/cycle would
+blow through — see PACE_SECONDS below.
 
 Usage:
-    python infra/seed/market_maker.py            # place a batch of orders, then exit
-    python infra/seed/market_maker.py --loop      # keep placing orders forever (Ctrl+C to stop)
+    python infra/seed/market_maker.py            # one bootstrap + one quoting pass, then exit
+    python infra/seed/market_maker.py --loop      # keep re-quoting forever (Ctrl+C to stop)
 """
 
 import argparse
 import random
 import sys
 import time
-import uuid
 
 import httpx
 
 API_BASE = "http://localhost:8000"
 
-# Mirrors libs/common/symbols.py — kept as a local literal so this script has
-# no dependency on the `common` package and can run with nothing but httpx.
 SEED_PRICES = {
-    "AAPL": 195.50,
-    "GOOGL": 175.20,
-    "MSFT": 425.80,
-    "AMZN": 185.40,
-    "TSLA": 245.60,
-    "NVDA": 128.30,
-    "META": 512.10,
-    "NFLX": 685.90,
+    "AAPL": 195.50, "GOOGL": 175.20, "MSFT": 425.80, "AMZN": 185.40,
+    "TSLA": 245.60, "NVDA": 128.30, "META": 512.10, "NFLX": 685.90,
 }
+SYMBOLS = list(SEED_PRICES)
 
-DEPOSIT_CHUNK = "1000000.00"  # matches the account-service per-call deposit cap
-DEPOSIT_CHUNKS = 10  # 10 * 1,000,000 = plenty of buying power for the bot
+BOTS = [{"username": f"bot{i}", "email": f"bot{i}@mse.local", "password": "BotPassw0rd!"} for i in range(1, 5)]
+DEMO = {"username": "demo", "email": "demo@mse.local", "password": "DemoPassw0rd!"}
+
+BOT_DEPOSIT = "1000000.00"
+DEMO_DEPOSIT = "100000.00"
+
+LEVELS = 5           # bid levels and ask levels per symbol
+LEVEL_STEP = 0.001    # 0.1% per level
+QTY_PER_LEVEL = 50
+
+# 20 orders/bot/cycle at this pace = ~44s/cycle, well under 30/min per identity.
+PACE_SECONDS = 2.2
 
 
 def wait_for_gateway(client: httpx.Client, retries: int = 30, delay: float = 2.0) -> bool:
@@ -47,53 +60,95 @@ def wait_for_gateway(client: httpx.Client, retries: int = 30, delay: float = 2.0
     return False
 
 
-def register_bot(client: httpx.Client) -> dict:
-    tag = str(uuid.uuid4())[:8]
-    username = f"mm_bot_{tag}"
-    res = client.post(
+def register_or_login(client: httpx.Client, identity: dict) -> dict | None:
+    r = client.post(
         "/api/auth/register",
         json={
-            "username": username,
-            "email": f"{username}@mse.local",
-            "password": "market-maker-bot-pw",
-            "full_name": "Market Maker Bot",
+            "username": identity["username"],
+            "email": identity["email"],
+            "password": identity["password"],
+            "full_name": identity["username"].replace("_", " ").title(),
         },
     )
-    res.raise_for_status()
-    print(f"registered bot {username}")
-    return res.json()
+    if r.status_code == 201:
+        print(f"registered {identity['username']}")
+        return r.json()
+    if r.status_code == 409:
+        r = client.post("/api/auth/login", data={"username": identity["username"], "password": identity["password"]})
+        if r.status_code == 200:
+            print(f"{identity['username']} already exists, logged in")
+            return r.json()
+    print(f"could not register or log in {identity['username']}: {r.status_code} {r.text}")
+    return None
 
 
-def fund_bot(client: httpx.Client, headers: dict) -> None:
-    for _ in range(DEPOSIT_CHUNKS):
-        client.post("/api/account/deposit", headers=headers, json={"amount": DEPOSIT_CHUNK})
-    print(f"deposited {int(float(DEPOSIT_CHUNK) * DEPOSIT_CHUNKS):,} to the bot wallet")
+def deposit(client: httpx.Client, headers: dict, amount: str) -> None:
+    client.post("/api/account/deposit", headers=headers, json={"amount": amount})
 
 
-def place_random_order(client: httpx.Client, headers: dict) -> None:
-    symbol = random.choice(list(SEED_PRICES))
-    side = random.choice(["BUY", "SELL"])
-    base_price = SEED_PRICES[symbol]
-    price = round(base_price * (1 + random.uniform(-0.01, 0.01)), 2)
-    qty = random.randint(1, 50)
+def place(client: httpx.Client, headers: dict, symbol: str, side: str, quantity: int, price: float) -> httpx.Response:
+    return client.post(
+        "/api/orders",
+        headers=headers,
+        json={"symbol": symbol, "side": side, "order_type": "LIMIT", "price": f"{price:.4f}", "quantity": quantity},
+    )
 
-    try:
-        res = client.post(
-            "/api/orders",
-            headers=headers,
-            json={"symbol": symbol, "side": side, "order_type": "LIMIT", "price": f"{price:.4f}", "quantity": qty},
-        )
-        status = "ACCEPTED" if res.status_code == 201 else f"FAILED ({res.status_code})"
-    except httpx.TransportError as exc:
-        status = f"FAILED ({exc})"
-    print(f"[{symbol}] {side} {qty} @ ${price:.2f} -> {status}")
+
+def bootstrap_inventory(client: httpx.Client, bots: list[dict]) -> None:
+    """Give bot1..bot4 initial shares so they can quote asks (a SELL with no
+    owned shares is correctly rejected — see the shared contract). Crosses a
+    small trade between adjacent bots for every symbol. On a completely fresh
+    system where NO account has ever held shares, the sell leg is expected to
+    be rejected (409) — that's not a bug here, it means Portfolio/Order
+    haven't been seeded with any prior holdings yet. We log and move on; the
+    quoting loop still posts bids, and asks simply start succeeding on their
+    own the moment any bot accumulates real inventory from a filled buy."""
+    print("bootstrapping inventory (best-effort — a fresh system may reject every sell here, and that's fine)...")
+    for i, symbol in enumerate(SYMBOLS):
+        seller = bots[i % len(bots)]
+        buyer = bots[(i + 1) % len(bots)]
+        price = SEED_PRICES[symbol]
+        r_sell = place(client, seller["headers"], symbol, "SELL", 20, price)
+        if r_sell.status_code != 201:
+            print(f"  [{symbol}] seed sell by {seller['identity']} rejected ({r_sell.status_code}) — skipping")
+            continue
+        r_buy = place(client, buyer["headers"], symbol, "BUY", 20, price)
+        status = "crossed" if r_buy.status_code == 201 else f"buy failed ({r_buy.status_code})"
+        print(f"  [{symbol}] {seller['identity']} -> {buyer['identity']} @ {price:.2f}: {status}")
+        time.sleep(PACE_SECONDS)
+
+
+def quote_symbol(client: httpx.Client, bot: dict, symbol: str, cross: bool) -> None:
+    base = SEED_PRICES[symbol]
+    for level in range(1, LEVELS + 1):
+        bid_price = round(base * (1 - LEVEL_STEP * level), 2)
+        r = place(client, bot["headers"], symbol, "BUY", QTY_PER_LEVEL, bid_price)
+        print(f"[{bot['identity']}] {symbol} BID {QTY_PER_LEVEL} @ {bid_price:.2f} -> {r.status_code}")
+        time.sleep(PACE_SECONDS)
+
+        ask_price = round(base * (1 + LEVEL_STEP * level), 2)
+        r = place(client, bot["headers"], symbol, "SELL", QTY_PER_LEVEL, ask_price)
+        print(f"[{bot['identity']}] {symbol} ASK {QTY_PER_LEVEL} @ {ask_price:.2f} -> {r.status_code}")
+        time.sleep(PACE_SECONDS)
+
+    if cross:
+        # Occasionally cross the spread so a trade actually prints — a book
+        # full of resting quotes with nothing filling makes for a dead demo.
+        r = place(client, bot["headers"], symbol, "BUY", QTY_PER_LEVEL, round(base * (1 + LEVEL_STEP), 2))
+        print(f"[{bot['identity']}] {symbol} crossing buy -> {r.status_code}")
+        time.sleep(PACE_SECONDS)
+
+
+def run_cycle(client: httpx.Client, bots: list[dict], cross: bool) -> None:
+    for i, bot in enumerate(bots):
+        my_symbols = SYMBOLS[i::len(bots)]  # round-robin: 2 symbols/bot for 4 bots x 8 symbols
+        for symbol in my_symbols:
+            quote_symbol(client, bot, symbol, cross=cross and random.random() < 0.5)
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--loop", action="store_true", help="place orders forever instead of a fixed batch")
-    parser.add_argument("--count", type=int, default=40, help="orders to place in one-shot mode")
-    parser.add_argument("--interval", type=float, default=1.5, help="seconds between orders")
+    parser.add_argument("--loop", action="store_true", help="keep re-quoting forever instead of a single pass")
     args = parser.parse_args()
 
     with httpx.Client(base_url=API_BASE, timeout=10.0) as client:
@@ -101,17 +156,31 @@ def main() -> None:
             print("gateway never came up — giving up")
             sys.exit(1)
 
-        bot = register_bot(client)
-        headers = {"Authorization": f"Bearer {bot['access_token']}"}
-        fund_bot(client, headers)
+        bots = []
+        for identity in BOTS:
+            auth = register_or_login(client, identity)
+            if auth is None:
+                continue
+            headers = {"Authorization": f"Bearer {auth['access_token']}"}
+            deposit(client, headers, BOT_DEPOSIT)
+            bots.append({"identity": identity["username"], "headers": headers})
 
-        print(f"placing orders ({'forever' if args.loop else args.count})...")
-        placed = 0
+        demo_auth = register_or_login(client, DEMO)
+        if demo_auth is not None:
+            deposit(client, {"Authorization": f"Bearer {demo_auth['access_token']}"}, DEMO_DEPOSIT)
+
+        if len(bots) < 2:
+            print("fewer than 2 bots came up — can't seed inventory or quote both sides. Exiting.")
+            sys.exit(1)
+
+        bootstrap_inventory(client, bots)
+
+        print(f"quoting {len(SYMBOLS)} symbols across {len(bots)} bots ({'looping' if args.loop else 'one pass'})...")
         try:
-            while args.loop or placed < args.count:
-                place_random_order(client, headers)
-                placed += 1
-                time.sleep(args.interval)
+            while True:
+                run_cycle(client, bots, cross=True)
+                if not args.loop:
+                    break
         except KeyboardInterrupt:
             print("\nmarket maker stopped.")
 
