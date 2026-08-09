@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from sqlalchemy import func
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
-from common.redis_client import redis, seen_event
+from common.redis_client import seen_event
 from common.money import to_money, money_str
 from common.symbols import normalize_symbol
 from app.models import Trade, Candle
@@ -35,7 +35,7 @@ async def upsert_candle(s, sym: str, interval: str, bucket: datetime, price: flo
         }
     ))
 
-async def handle_trade(env: dict, WriteSession):
+async def handle_trade(env: dict, WriteSession, redis):
     if await seen_event(redis, "marketdata", env["event_id"]): 
         return
 

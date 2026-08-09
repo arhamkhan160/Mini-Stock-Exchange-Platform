@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/sh
 # Entrypoint override for the Market Data REPLICA.
 #
 # The replica must NEVER initdb — it is a byte-for-byte base backup of the

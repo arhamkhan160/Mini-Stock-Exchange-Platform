@@ -106,7 +106,7 @@ export default function CandleChart({ symbol, interval }: { symbol: string; inte
   }, [symbol, interval, empty, loading]);
 
   if (loading) return <div className="h-[420px] w-full flex items-center justify-center border border-[#1f2637] rounded-xl"><Spinner /></div>;
-  if (empty) return <div className="h-[420px] w-full border border-[#1f2637] rounded-xl flex items-center justify-center"><Empty title="No trading activity yet" subtitle="There is no historical data for this symbol." /></div>;
+  if (empty) return <div className="h-[420px] w-full border border-[#1f2637] rounded-xl flex items-center justify-center"><Empty title="No trading activity yet" hint="There is no historical data for this symbol." /></div>;
 
   return <div ref={ref} className="h-[420px] w-full border border-[#1f2637] rounded-xl overflow-hidden" />;
 }

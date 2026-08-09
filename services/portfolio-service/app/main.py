@@ -13,7 +13,7 @@ from sqlalchemy.exc import IntegrityError
 from common.config import settings
 from common.db import make_engine, make_sessionmaker, session_dependency
 from common.events import Broker
-from common.redis_client import redis, init_redis, close_redis, distributed_lock
+from common.redis_client import make_redis, distributed_lock
 from common.security import get_current_user, CurrentUser, require_internal_key
 from common.symbols import SYMBOLS, normalize_symbol
 from common.money import money_str, to_money
@@ -23,6 +23,8 @@ from app.events import handle_trade_executed, handle_order_cancelled_or_rejected
 
 log = logging.getLogger(__name__)
 
+redis = make_redis(settings.REDIS_URL)
+
 engine = make_engine(settings.DATABASE_URL)
 Session = make_sessionmaker(engine)
 get_session = session_dependency(Session)
@@ -31,14 +33,13 @@ broker = Broker(settings.RABBITMQ_URL)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    await init_redis(settings.REDIS_URL)
     await broker.connect()
     
     async def _trade_executed(env):
-        await handle_trade_executed(env, Session)
+        await handle_trade_executed(env, Session, redis)
         
     async def _order_cancelled(env):
-        await handle_order_cancelled_or_rejected(env, Session)
+        await handle_order_cancelled_or_rejected(env, Session, redis)
         
     await broker.consume("trade.executed", "q.portfolio.trade_executed", _trade_executed)
     await broker.consume("order.cancelled", "q.portfolio.order_cancelled", _order_cancelled)
@@ -47,7 +48,7 @@ async def lifespan(app: FastAPI):
     yield
     
     await broker.close()
-    await close_redis()
+    await redis.aclose()
     await engine.dispose()
 
 app = FastAPI(lifespan=lifespan, title="Portfolio Service", version="1.0.0")

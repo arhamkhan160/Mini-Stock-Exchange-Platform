@@ -5,6 +5,7 @@ import { MarketAPI } from '@/lib/api';
 import { useLivePrices } from '@/lib/ws';
 import { SymbolQuote } from '@/lib/types';
 import { Spinner, ErrorBox, Tone, Badge, Button } from '@/components/ui';
+import { pct, signed } from '@/lib/format';
 import dynamic from 'next/dynamic';
 import OrderTicket from '@/components/OrderTicket';
 import OrderBook from '@/components/OrderBook';
@@ -66,8 +67,8 @@ export default function MarketPage({ params }: { params: { symbol: string } }) {
             </h1>
             <div className="flex items-center gap-3 mt-1">
               <span className="text-xl num flash-up" key={currentPrice}>${currentPrice}</span>
-              <Tone value={Number(quote?.change_pct || 0)} format="pct" />
-              <Tone value={Number(quote?.change || 0)} format="money" prefix="$" />
+              <Tone value={Number(quote?.change_pct || 0)}>{pct(Number(quote?.change_pct || 0))}</Tone>
+              <Tone value={Number(quote?.change || 0)}>{signed(Number(quote?.change || 0))}</Tone>
             </div>
           </div>
           
@@ -87,9 +88,9 @@ export default function MarketPage({ params }: { params: { symbol: string } }) {
               </button>
             </div>
             
-            <Badge variant={status === "live" ? "success" : "warning"}>
+            <span className={`px-2 py-1 rounded text-xs font-semibold ${status === "live" ? "bg-green-500/20 text-green-400" : "bg-yellow-500/20 text-yellow-400"}`}>
               {status === "live" ? "Live" : "Reconnecting..."}
-            </Badge>
+            </span>
           </div>
         </div>
 

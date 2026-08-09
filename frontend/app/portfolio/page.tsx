@@ -3,6 +3,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { PortfolioAPI, NotificationAPI } from '@/lib/api';
 import { Portfolio } from '@/lib/types';
 import { Spinner, ErrorBox, Card, Tone, Empty } from '@/components/ui';
+import { signed } from '@/lib/format';
 import Protected from '@/components/Protected';
 import HoldingsTable from '@/components/HoldingsTable';
 
@@ -78,14 +79,14 @@ export default function PortfolioPage() {
           <Card className="p-4">
             <h3 className="text-sm text-gray-400 font-medium">Unrealized P&L</h3>
             <div className="text-2xl font-bold mt-1 num">
-              <Tone value={Number(totals.total_unrealized_pnl)} format="money" prefix="$" />
+              <Tone value={Number(totals.total_unrealized_pnl)}>{signed(Number(totals.total_unrealized_pnl))}</Tone>
             </div>
           </Card>
 
           <Card className="p-4">
             <h3 className="text-sm text-gray-400 font-medium">Realized P&L</h3>
             <div className="text-2xl font-bold mt-1 num">
-              <Tone value={Number(totals.total_realized_pnl)} format="money" prefix="$" />
+              <Tone value={Number(totals.total_realized_pnl)}>{signed(Number(totals.total_realized_pnl))}</Tone>
             </div>
           </Card>
         </div>
@@ -101,7 +102,7 @@ export default function PortfolioPage() {
             <Card className="p-8">
               <Empty 
                 title="You don't own anything yet" 
-                subtitle="Place your first order to start building your portfolio." 
+                hint="Place your first order to start building your portfolio." 
               />
             </Card>
           ) : (

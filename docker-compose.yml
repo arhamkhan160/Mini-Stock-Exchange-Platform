@@ -108,7 +108,7 @@ services:
       REPLICATION_PASSWORD: ${REPLICATION_PASSWORD}
       PGDATA: /var/lib/postgresql/data
     user: postgres
-    entrypoint: ["/bin/bash", "/setup-replica.sh"]
+    entrypoint: ["/bin/sh", "/setup-replica.sh"]
     ports: ["127.0.0.1:5437:5432"]
     volumes:
       - pg-market-replica:/var/lib/postgresql/data

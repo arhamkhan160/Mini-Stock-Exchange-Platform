@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/sh
 # Runs once, on first init of the Market Data PRIMARY.
 # Creates the replication role + slot and enables streaming replication.
 # Mounted into /docker-entrypoint-initdb.d/ so the official image runs it after initdb.

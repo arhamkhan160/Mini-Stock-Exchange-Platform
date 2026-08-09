@@ -6,7 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from common.money import to_money
-from common.redis_client import redis, distributed_lock
+from common.redis_client import distributed_lock
 from common.symbols import normalize_symbol
 from app.models import Holding, ProcessedEvent, ShareReservation, TradeHistory
 
@@ -44,7 +44,7 @@ async def get_or_create_holding(session, user_id: uuid.UUID, symbol: str) -> Hol
     return holding
 
 
-async def handle_trade_executed(env: dict, Session):
+async def handle_trade_executed(env: dict, Session, redis):
     event_id = env["event_id"]
     if await seen_event(redis, "portfolio", event_id):
         return
@@ -127,7 +127,7 @@ async def handle_trade_executed(env: dict, Session):
         await mark_event_processed(redis, "portfolio", event_id)
 
 
-async def handle_order_cancelled_or_rejected(env: dict, Session):
+async def handle_order_cancelled_or_rejected(env: dict, Session, redis):
     event_id = env["event_id"]
     if await seen_event(redis, "portfolio", event_id):
         return

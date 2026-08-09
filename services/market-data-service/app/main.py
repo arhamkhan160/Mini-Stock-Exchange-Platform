@@ -13,7 +13,7 @@ from sqlalchemy.exc import OperationalError
 from common.config import settings
 from common.db import make_engine, make_sessionmaker
 from common.events import Broker
-from common.redis_client import redis, init_redis, close_redis
+from common.redis_client import make_redis
 from common.symbols import SYMBOLS, SEED_PRICES, normalize_symbol
 from common.money import money_str
 
@@ -22,6 +22,8 @@ from app.ws import MANAGER, Connection
 from app.events import handle_trade
 
 log = logging.getLogger(__name__)
+
+redis = make_redis(settings.REDIS_URL)
 
 write_engine = make_engine(settings.DATABASE_URL)
 replica_url = settings.DATABASE_REPLICA_URL or settings.DATABASE_URL
@@ -84,7 +86,6 @@ async def warmup_cache():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    await init_redis(settings.REDIS_URL)
     await broker.connect()
     
     # Verify replica
@@ -101,7 +102,7 @@ async def lifespan(app: FastAPI):
     tick_task = asyncio.create_task(tick_pump())
     
     async def _handle_trade(env):
-        await handle_trade(env, WriteSession)
+        await handle_trade(env, WriteSession, redis)
         
     await broker.consume("trade.executed", "q.marketdata.trade_executed", _handle_trade)
 
@@ -109,7 +110,7 @@ async def lifespan(app: FastAPI):
     
     tick_task.cancel()
     await broker.close()
-    await close_redis()
+    await redis.aclose()
     await write_engine.dispose()
     await read_engine.dispose()
 

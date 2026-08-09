@@ -1,6 +1,7 @@
 'use client';
 import { Holding } from '@/lib/types';
 import { Table, Tone, Badge } from './ui';
+import { signed } from '@/lib/format';
 import Link from 'next/link';
 
 export default function HoldingsTable({ holdings }: { holdings: Holding[] }) {
@@ -8,20 +9,7 @@ export default function HoldingsTable({ holdings }: { holdings: Holding[] }) {
 
   return (
     <div className="overflow-x-auto">
-      <Table>
-        <thead>
-          <tr>
-            <th className="text-left">Symbol</th>
-            <th className="text-right">Qty</th>
-            <th className="text-right">Available</th>
-            <th className="text-right">Avg Cost</th>
-            <th className="text-right">Last Price</th>
-            <th className="text-right">Market Value</th>
-            <th className="text-right">Unrealized P&L</th>
-            <th className="text-right">Realized P&L</th>
-          </tr>
-        </thead>
-        <tbody>
+      <Table head={["Symbol", "Qty", "Available", "Avg Cost", "Last Price", "Market Value", "Unrealized P&L", "Realized P&L"]}>
           {holdings.map((h) => {
             const unrealized = Number(h.unrealized_pnl);
             const realized = Number(h.realized_pnl);
@@ -46,15 +34,14 @@ export default function HoldingsTable({ holdings }: { holdings: Holding[] }) {
                 </td>
                 <td className="text-right num">${h.market_value}</td>
                 <td className="text-right num">
-                  <Tone value={unrealized} format="money" prefix="$" />
+                  <Tone value={unrealized}>{signed(unrealized)}</Tone>
                 </td>
                 <td className="text-right num">
-                  <Tone value={realized} format="money" prefix="$" />
+                  <Tone value={realized}>{signed(realized)}</Tone>
                 </td>
               </tr>
             );
           })}
-        </tbody>
       </Table>
     </div>
   );
