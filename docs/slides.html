@@ -1,0 +1,534 @@
+<title>Mini Stock Exchange Platform — SWE 4602</title>
+
+<style>
+  /* ── tokens ───────────────────────────────────────────────────────────
+     Ground is a deep indigo-slate rather than black: a trading desk at
+     dusk, not a hacker terminal. Amber carries structure (terminal chrome,
+     the gold ticker); teal and red are reserved as SEMANTIC colours for
+     up/down so they never fight the accent.                              */
+  :root {
+    --ground:   #0E1420;
+    --surface:  #161E2E;
+    --surface2: #1E293C;
+    --line:     #2A3752;
+    --ink:      #E8ECF4;
+    --muted:    #8592AB;
+    --accent:   #E8A33D;
+    --up:       #3FBF9F;
+    --down:     #E5645E;
+    --shadow:   0 18px 50px -20px rgba(0,0,0,.7);
+
+    --mono: ui-monospace, "Cascadia Mono", "Cascadia Code", Consolas,
+            "SF Mono", "Liberation Mono", monospace;
+    --sans: ui-sans-serif, "Segoe UI Variable Text", "Segoe UI", system-ui,
+            -apple-system, "Helvetica Neue", sans-serif;
+  }
+
+  @media (prefers-color-scheme: light) {
+    :root {
+      --ground:  #F6F5F1;
+      --surface: #FFFFFF;
+      --surface2:#EFEEE8;
+      --line:    #DCDAD1;
+      --ink:     #171C2B;
+      --muted:   #626B80;
+      --accent:  #B0741A;
+      --up:      #1E8E73;
+      --down:    #C4453F;
+      --shadow:  0 14px 40px -22px rgba(23,28,43,.35);
+    }
+  }
+  :root[data-theme="light"] {
+    --ground:  #F6F5F1; --surface: #FFFFFF; --surface2:#EFEEE8;
+    --line:    #DCDAD1; --ink:     #171C2B; --muted:   #626B80;
+    --accent:  #B0741A; --up:      #1E8E73; --down:    #C4453F;
+    --shadow:  0 14px 40px -22px rgba(23,28,43,.35);
+  }
+  :root[data-theme="dark"] {
+    --ground:  #0E1420; --surface: #161E2E; --surface2:#1E293C;
+    --line:    #2A3752; --ink:     #E8ECF4; --muted:   #8592AB;
+    --accent:  #E8A33D; --up:      #3FBF9F; --down:    #E5645E;
+    --shadow:  0 18px 50px -20px rgba(0,0,0,.7);
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--ground);
+    color: var(--ink);
+    font-family: var(--sans);
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* ── deck shell ──────────────────────────────────────────────────── */
+  .deck { position: relative; min-height: 100vh; }
+
+  .slide {
+    display: none;
+    min-height: 100vh;
+    padding: clamp(2rem, 5vw, 4.5rem) clamp(1.25rem, 6vw, 6rem) 5.5rem clamp(3.5rem, 8vw, 7.5rem);
+    animation: rise .32s ease-out;
+  }
+  .slide[data-active] { display: flex; flex-direction: column; justify-content: center; }
+
+  @keyframes rise { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+  @media (prefers-reduced-motion: reduce) { .slide { animation: none; } }
+
+  /* ── the ladder: an order book doubles as the progress rail ──────── */
+  .ladder {
+    position: fixed; left: clamp(.9rem, 2.2vw, 2rem); top: 50%;
+    transform: translateY(-50%);
+    display: flex; flex-direction: column; gap: .55rem;
+    z-index: 5;
+  }
+  .rung {
+    width: 26px; height: 3px; border: 0; padding: 0; cursor: pointer;
+    background: var(--line); border-radius: 2px;
+    transition: background .2s, width .2s;
+  }
+  .rung:nth-child(-n+3) { background: color-mix(in srgb, var(--down) 32%, var(--line)); }
+  .rung:nth-child(n+4)  { background: color-mix(in srgb, var(--up) 32%, var(--line)); }
+  .rung[aria-current="true"] { background: var(--accent); width: 40px; }
+  .rung:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+
+  /* ── type ─────────────────────────────────────────────────────────── */
+  .eyebrow {
+    font-family: var(--mono); font-size: .72rem; letter-spacing: .16em;
+    text-transform: uppercase; color: var(--accent); margin: 0 0 1.1rem;
+  }
+  h1 {
+    font-family: var(--mono); font-weight: 600;
+    font-size: clamp(2rem, 5.4vw, 4rem); line-height: 1.02;
+    letter-spacing: -.03em; margin: 0 0 1rem; text-wrap: balance;
+  }
+  h2 {
+    font-family: var(--mono); font-weight: 600;
+    font-size: clamp(1.5rem, 3.4vw, 2.5rem); line-height: 1.1;
+    letter-spacing: -.02em; margin: 0 0 .5rem; text-wrap: balance;
+  }
+  h3 {
+    font-family: var(--mono); font-size: .8rem; font-weight: 600;
+    letter-spacing: .1em; text-transform: uppercase;
+    color: var(--muted); margin: 0 0 .55rem;
+  }
+  .lede { font-size: clamp(1rem, 1.7vw, 1.28rem); color: var(--muted); max-width: 62ch; margin: 0 0 2rem; }
+  p { margin: 0 0 .7rem; }
+  strong { color: var(--ink); font-weight: 600; }
+  .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+
+  /* ── layout helpers ───────────────────────────────────────────────── */
+  .cols { display: grid; gap: clamp(1.25rem, 3vw, 2.75rem); }
+  .c2 { grid-template-columns: 1fr 1fr; }
+  .c3 { grid-template-columns: repeat(3, 1fr); }
+  .c-7-5 { grid-template-columns: 7fr 5fr; }
+  @media (max-width: 900px) { .c2, .c3, .c-7-5 { grid-template-columns: 1fr; } }
+
+  .card {
+    background: var(--surface); border: 1px solid var(--line);
+    border-radius: 10px; padding: 1.1rem 1.25rem;
+  }
+  .stack { display: flex; flex-direction: column; gap: .85rem; }
+
+  /* ── order book ladder graphic ────────────────────────────────────── */
+  .book { font-family: var(--mono); font-variant-numeric: tabular-nums; font-size: .95rem; }
+  .book .row { display: grid; grid-template-columns: 1fr auto; gap: 1.5rem; padding: .22rem .7rem; border-radius: 4px; }
+  .book .ask { color: var(--down); background: color-mix(in srgb, var(--down) 9%, transparent); }
+  .book .bid { color: var(--up);   background: color-mix(in srgb, var(--up) 9%, transparent); }
+  .book .qty { color: var(--muted); }
+  .book .spread {
+    display: flex; justify-content: space-between; align-items: center;
+    margin: .45rem 0; padding: .3rem .7rem;
+    border-top: 1px dashed var(--line); border-bottom: 1px dashed var(--line);
+    font-size: .78rem; letter-spacing: .08em; text-transform: uppercase; color: var(--muted);
+  }
+
+  /* ── service map ──────────────────────────────────────────────────── */
+  .svc-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: .6rem; }
+  @media (max-width: 760px) { .svc-grid { grid-template-columns: repeat(2, 1fr); } }
+  .svc {
+    background: var(--surface); border: 1px solid var(--line);
+    border-radius: 8px; padding: .6rem .7rem;
+  }
+  .svc .name { font-family: var(--mono); font-size: .85rem; font-weight: 600; }
+  .svc .port { font-family: var(--mono); font-size: .7rem; color: var(--accent); }
+  .svc .db   { font-family: var(--mono); font-size: .68rem; color: var(--muted); margin-top: .2rem; }
+
+  /* ── step list (a real sequence, so it is numbered) ───────────────── */
+  ol.steps { list-style: none; counter-reset: s; margin: 0; padding: 0; display: flex; flex-direction: column; gap: .5rem; }
+  ol.steps li {
+    counter-increment: s; display: grid; grid-template-columns: auto 1fr; gap: .8rem;
+    align-items: baseline; padding: .35rem 0; border-bottom: 1px solid var(--line);
+  }
+  ol.steps li::before {
+    content: counter(s, decimal-leading-zero);
+    font-family: var(--mono); font-size: .78rem; color: var(--accent);
+  }
+  .pivot { border-bottom-color: var(--accent) !important; }
+
+  /* ── data + tables ────────────────────────────────────────────────── */
+  table { width: 100%; border-collapse: collapse; font-size: .88rem; }
+  th, td { text-align: left; padding: .42rem .6rem; border-bottom: 1px solid var(--line); }
+  th { font-family: var(--mono); font-size: .7rem; letter-spacing: .09em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+  td.num, th.num { text-align: right; font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  .scroll { overflow-x: auto; }
+
+  .metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: .8rem; }
+  @media (max-width: 760px) { .metrics { grid-template-columns: repeat(2, 1fr); } }
+  .metric { border-left: 2px solid var(--accent); padding-left: .75rem; }
+  .metric .v { font-family: var(--mono); font-size: clamp(1.3rem, 2.6vw, 1.9rem); font-weight: 600; letter-spacing: -.02em; }
+  .metric .k { font-size: .74rem; color: var(--muted); }
+
+  code, .code {
+    font-family: var(--mono); font-size: .82rem;
+    background: var(--surface2); border: 1px solid var(--line);
+    border-radius: 5px; padding: .1rem .35rem;
+  }
+  pre.code { display: block; padding: .7rem .85rem; overflow-x: auto; white-space: pre; margin: 0; }
+
+  .pass { color: var(--up); font-family: var(--mono); }
+  .warnc { color: var(--down); font-family: var(--mono); }
+
+  .team { display: grid; grid-template-columns: repeat(4, 1fr); gap: .9rem; margin-top: 1.5rem; }
+  @media (max-width: 760px) { .team { grid-template-columns: repeat(2, 1fr); } }
+  .team .who { font-size: .92rem; font-weight: 600; }
+  .team .id  { font-family: var(--mono); font-size: .74rem; color: var(--muted); }
+  .team .role{ font-size: .74rem; color: var(--accent); margin-top: .15rem; }
+
+  /* ── chrome ───────────────────────────────────────────────────────── */
+  .chrome {
+    position: fixed; bottom: 0; left: 0; right: 0;
+    display: flex; justify-content: space-between; align-items: center;
+    padding: .7rem clamp(1rem, 4vw, 2.5rem);
+    font-family: var(--mono); font-size: .72rem; color: var(--muted);
+    border-top: 1px solid var(--line); background: var(--ground);
+  }
+  .chrome nav { display: flex; gap: .4rem; }
+  .chrome button {
+    font-family: var(--mono); font-size: .72rem; color: var(--muted);
+    background: var(--surface); border: 1px solid var(--line);
+    border-radius: 5px; padding: .25rem .6rem; cursor: pointer;
+  }
+  .chrome button:hover { color: var(--ink); border-color: var(--accent); }
+  .chrome button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  .tag {
+    display: inline-block; font-family: var(--mono); font-size: .68rem;
+    letter-spacing: .06em; text-transform: uppercase;
+    border: 1px solid var(--line); border-radius: 99px;
+    padding: .12rem .55rem; color: var(--muted);
+  }
+  .tag.sync  { border-color: color-mix(in srgb, var(--accent) 55%, var(--line)); color: var(--accent); }
+  .tag.async { border-color: color-mix(in srgb, var(--up) 55%, var(--line)); color: var(--up); }
+</style>
+
+<div class="deck">
+
+  <!-- ═══════════════ 1 · TITLE ═══════════════ -->
+  <section class="slide" data-active>
+    <p class="eyebrow">SWE 4602 · Software Design &amp; Architectures · Islamic University of Technology</p>
+    <h1>Mini Stock Exchange Platform</h1>
+    <p class="lede">
+      A microservices trading system where orders from real users are matched against
+      <strong>each other</strong> by a price–time-priority engine — not against a price simulator.
+    </p>
+
+    <div class="metrics" style="margin-bottom:1.6rem">
+      <div class="metric"><div class="v">7</div><div class="k">microservices + gateway</div></div>
+      <div class="metric"><div class="v">18</div><div class="k">containers, one command</div></div>
+      <div class="metric"><div class="v">7</div><div class="k">databases, one per service</div></div>
+      <div class="metric"><div class="v">13</div><div class="k">test suites, 0 failures</div></div>
+    </div>
+
+    <div class="team">
+      <div><div class="who">Arham Ibrahim Khan</div><div class="id">220042160</div><div class="role">Gateway · Notification · Integration</div></div>
+      <div><div class="who">Arham Apon Utsho</div><div class="id">220042153</div><div class="role">User · Account</div></div>
+      <div><div class="who">Abidur Rahman Asif</div><div class="id">220042152</div><div class="role">Order · Matching Engine</div></div>
+      <div><div class="who">Mustain Billah Taj</div><div class="id">220042166</div><div class="role">Market Data · Portfolio</div></div>
+    </div>
+  </section>
+
+  <!-- ═══════════════ 2 · THE DOMAIN ═══════════════ -->
+  <section class="slide">
+    <p class="eyebrow">The domain in 30 seconds</p>
+    <h2>An exchange is a matchmaker</h2>
+    <p class="lede">It sets no prices and owns nothing. It keeps a list of who wants to buy and who wants to sell, and pairs them when the prices meet.</p>
+
+    <div class="cols c2">
+      <div class="card book">
+        <h3>AAPL — the order book</h3>
+        <div class="row ask"><span>196.09</span><span class="qty">90</span></div>
+        <div class="row ask"><span>195.89</span><span class="qty">170</span></div>
+        <div class="row ask"><span>195.70</span><span class="qty">95</span></div>
+        <div class="spread"><span>spread</span><span class="mono">0.40</span></div>
+        <div class="row bid"><span>195.30</span><span class="qty">95</span></div>
+        <div class="row bid"><span>195.11</span><span class="qty">180</span></div>
+        <div class="row bid"><span>194.91</span><span class="qty">90</span></div>
+        <p style="font-size:.76rem;color:var(--muted);margin:.8rem 0 0;font-family:var(--sans)">
+          Sellers above, buyers below. The best bid is always under the best ask —
+          if they ever crossed, they would already have traded.
+        </p>
+      </div>
+
+      <div class="stack">
+        <div class="card">
+          <h3>Rule 1 — price, then time</h3>
+          <p>The cheapest seller is matched first. Ties are broken by who arrived first, which is why each price level is a queue.</p>
+        </div>
+        <div class="card">
+          <h3>Rule 2 — price improvement</h3>
+          <p>Bid <span class="mono">200.00</span>, cheapest ask is <span class="mono">195.70</span> → you pay <strong class="mono">195.70</strong>. You named your worst acceptable price and got a better one.</p>
+          <p style="color:var(--muted);font-size:.85rem;margin:0">So $2,000 was reserved but only $1,957 spent — the difference <strong>must be returned</strong>.</p>
+        </div>
+        <div class="card">
+          <h3>Rule 3 — you cannot sell what you do not own</h3>
+          <p>Buys reserve <strong>cash</strong>; sells reserve <strong>shares</strong>. Without the second, a user could sell the same 10 shares twice.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════════ 3 · ARCHITECTURE ═══════════════ -->
+  <section class="slide">
+    <p class="eyebrow">Architecture</p>
+    <h2>Split by what scales together</h2>
+    <p class="lede">
+      Four genuinely different engineering problems: market data is read-heavy, matching is
+      latency-critical, cash is consistency-critical, notifications are fire-and-forget.
+      One process would force one set of trade-offs on all four.
+    </p>
+
+    <div class="svc-grid" style="margin-bottom:1.1rem">
+      <div class="svc"><div class="name">User</div><div class="port">:8001</div><div class="db">user_db</div></div>
+      <div class="svc"><div class="name">Account</div><div class="port">:8002</div><div class="db">account_db</div></div>
+      <div class="svc"><div class="name">Order</div><div class="port">:8003</div><div class="db">order_db</div></div>
+      <div class="svc"><div class="name">Matching Engine</div><div class="port">:8004</div><div class="db">in memory — by design</div></div>
+      <div class="svc"><div class="name">Market Data</div><div class="port">:8005</div><div class="db">market_db + replica</div></div>
+      <div class="svc"><div class="name">Portfolio</div><div class="port">:8006</div><div class="db">portfolio_db</div></div>
+      <div class="svc"><div class="name">Notification</div><div class="port">:8007</div><div class="db">notification_db</div></div>
+      <div class="svc" style="border-color:var(--accent)"><div class="name">API Gateway</div><div class="port">:8000</div><div class="db">JWT · rate limit · routing</div></div>
+    </div>
+
+    <div class="cols c3">
+      <div class="card">
+        <h3>Database per service</h3>
+        <p>Seven separate Postgres <em>servers</em>, not seven schemas. No service can read another's tables — it must ask over HTTP or learn from an event.</p>
+        <p style="color:var(--muted);font-size:.85rem;margin:0">Cost: no foreign keys, no cross-service transactions. That is exactly why we need a saga.</p>
+      </div>
+      <div class="card">
+        <h3><span class="tag sync">sync</span> when you need an answer now</h3>
+        <p>Only two calls: Order → Account to reserve cash, Order → Portfolio to reserve shares. You cannot accept an order and <em>then</em> discover the user is broke.</p>
+      </div>
+      <div class="card">
+        <h3><span class="tag async">async</span> when something has happened</h3>
+        <p>One <code>trade.executed</code> event updates five services. Five blocking calls would let the slowest one throttle the matching engine.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════════ 4 · THE SAGA ═══════════════ -->
+  <section class="slide">
+    <p class="eyebrow">Placing an order</p>
+    <h2>A saga, because there is no ROLLBACK</h2>
+    <p class="lede">
+      The flow spans three services and three databases. A distributed transaction is not
+      available, so each step carries a compensating action that undoes it.
+    </p>
+
+    <div class="cols c-7-5">
+      <ol class="steps">
+        <li><span><strong>Gateway</strong> validates the JWT and the rate limit (30 orders/min)</span></li>
+        <li><span><strong>Order</strong> validates symbol, quantity, and the $0.01 tick — bad input dies here, nothing persisted</span></li>
+        <li><span>Order row written as <span class="mono">PENDING</span>, so the reservation has an ID to be idempotent against</span></li>
+        <li><span><strong>Account</strong> takes a Redis lock, checks buying power, reserves the cash — insufficient funds returns <span class="mono">409</span></span></li>
+        <li class="pivot"><span>Status <span class="mono">NEW</span>, publish <code>order.accepted</code> — <strong style="color:var(--accent)">the pivot: no rollback past here</strong></span></li>
+        <li><span><strong>Matching Engine</strong> pairs it by price–time priority and publishes <code>trade.executed</code> per fill</span></li>
+      </ol>
+
+      <div class="stack">
+        <div class="card">
+          <h3>Then five services react, in parallel</h3>
+          <p style="font-size:.9rem;margin:0">Order marks it filled · Account settles both sides · Portfolio updates holdings and P&amp;L · Market Data writes the candle and broadcasts a tick · Notification alerts both traders.</p>
+        </div>
+        <div class="card" style="border-color:color-mix(in srgb, var(--down) 40%, var(--line))">
+          <h3 style="color:var(--down)">Compensation</h3>
+          <p style="font-size:.9rem">Cash reserved, then the broker is down so the publish fails. Without compensation the money stays locked forever for an order that will never exist.</p>
+          <p style="font-size:.9rem;margin:0">Release is <strong>idempotent</strong> and returns "released 0" rather than 404, so the orchestrator can compensate blindly without knowing how far it got.</p>
+        </div>
+        <div class="card">
+          <h3>Cancelling is two-phase</h3>
+          <p style="font-size:.9rem;margin:0">Only the book knows whether an order is still resting, so the <strong>engine</strong> publishes the authoritative <code>order.cancelled</code>. That is why the UI says "Cancelling…" — it can still come back filled.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════════ 5 · RESILIENCE ═══════════════ -->
+  <section class="slide">
+    <p class="eyebrow">When things fail</p>
+    <h2>Four patterns, four failure modes</h2>
+    <p class="lede">Not a checklist — each one answers a different question, and we measured the problem before choosing the fix.</p>
+
+    <div class="cols c2" style="margin-bottom:1.1rem">
+      <div class="card" style="border-color:color-mix(in srgb, var(--down) 45%, var(--line))">
+        <h3 style="color:var(--down)">The incident we measured</h3>
+        <p style="font-size:.92rem">40 concurrent requests to a service that was <strong>down</strong> made a <strong>healthy</strong> service unreachable for 40 seconds.</p>
+        <p style="font-size:.92rem;margin:0">DNS lookups share a thread pool. A lookup for a host that does not exist holds its thread far longer than the connect timeout — enough of them and nothing is left for the services that <em>are</em> up. A cascading failure.</p>
+        <p class="mono" style="margin:.8rem 0 0;font-size:1.05rem">
+          <span class="warnc">40s</span> <span style="color:var(--muted)">→</span> <span class="pass">14s</span>
+          <span style="color:var(--muted);font-size:.8rem">after the fix</span>
+        </p>
+      </div>
+
+      <div class="stack">
+        <div class="card">
+          <h3>Circuit breaker <span style="color:var(--muted);text-transform:none;letter-spacing:0">— service is down</span></h3>
+          <p style="font-size:.9rem;margin:0">Stop calling it for 10s: no socket, no DNS lookup, no thread. <strong>Hard</strong> failures (no such host) open after 1; <strong>soft</strong> ones (timeout) need 4, so a blip cannot lock out a healthy service.</p>
+        </div>
+        <div class="card">
+          <h3>Bulkhead <span style="color:var(--muted);text-transform:none;letter-spacing:0">— stop it spreading</span></h3>
+          <p style="font-size:.9rem;margin:0">Cap in-flight requests per upstream at 8. One sick service can flood its own compartment, never the ship.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="cols c3">
+      <div class="card">
+        <h3>Retry + dead letter</h3>
+        <p style="font-size:.9rem;margin:0">A failed message waits in <code>&lt;queue&gt;.retry</code> for 5s, then returns. <strong>RabbitMQ does the waiting</strong>, so no consumer blocks. Dead-lettered after 5 attempts.</p>
+      </div>
+      <div class="card">
+        <h3>Idempotency</h3>
+        <p style="font-size:.9rem;margin:0">At-least-once delivery means every handler eventually sees a duplicate. The <code>processed_events</code> primary key is written <strong>in the same transaction</strong> as the work; Redis is a cache set <em>after</em> the commit.</p>
+      </div>
+      <div class="card">
+        <h3>Fail closed vs fail open</h3>
+        <p style="font-size:.9rem;margin:0">Redis down + reserving funds → <strong style="color:var(--down)">refuse</strong>, or a user spends the same cash twice. Redis down + rate limiting → <strong style="color:var(--up)">allow</strong>; protection is not correctness.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════════ 6 · PROOF ═══════════════ -->
+  <section class="slide">
+    <p class="eyebrow">Proof</p>
+    <h2>It runs, and we can show it</h2>
+
+    <div class="cols c-7-5">
+      <div class="stack">
+        <div class="card">
+          <h3>Master–slave replication, verified live</h3>
+          <pre class="code">$ pg_stat_replication on the primary
+ client_addr  |   state   | sync_state
+ 172.18.0.10  | streaming | async
+
+$ SELECT pg_is_in_recovery();  -- on the replica
+ t
+
+$ INSERT INTO trades ...       -- on the replica
+ ERROR: cannot execute INSERT in a
+        read-only transaction</pre>
+          <p style="font-size:.84rem;color:var(--muted);margin:.7rem 0 0">
+            Chart and history reads are served from the replica; trade ingestion writes to the primary.
+            Reads scale independently of trading.
+          </p>
+        </div>
+
+        <div class="card scroll">
+          <h3>Test suites</h3>
+          <table>
+            <thead><tr><th>Suite</th><th>Covers</th><th class="num">Result</th></tr></thead>
+            <tbody>
+              <tr><td>contract</td><td>money rules, events, JWT</td><td class="num pass">17 ✓</td></tr>
+              <tr><td>routes</td><td>all 23 gateway routes</td><td class="num pass">15 ✓</td></tr>
+              <tr><td>live routes</td><td>RabbitMQ → DB → gateway</td><td class="num pass">✓</td></tr>
+              <tr><td>smoke</td><td>register → trade → settle</td><td class="num pass">25 ✓</td></tr>
+              <tr><td>stack verify</td><td>health, queues, replication</td><td class="num pass">16 ✓</td></tr>
+              <tr><td>8 service self-checks</td><td>per-service edge cases</td><td class="num pass">all ✓</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="stack">
+        <div class="card">
+          <h3>Live data behind the demo</h3>
+          <table>
+            <tbody>
+              <tr><td>Orders</td><td class="num">735</td></tr>
+              <tr><td>Trades executed</td><td class="num">132</td></tr>
+              <tr><td>OHLC candles</td><td class="num">27,673</td></tr>
+              <tr><td>Ledger entries</td><td class="num">656</td></tr>
+              <tr><td>Notifications</td><td class="num">279</td></tr>
+              <tr><td>Event queues</td><td class="num">15</td></tr>
+            </tbody>
+          </table>
+          <p style="font-size:.82rem;color:var(--muted);margin:.7rem 0 0">
+            Orders span every state: filled, partially filled, cancelled and rejected.
+          </p>
+        </div>
+
+        <div class="card" style="border-color:color-mix(in srgb, var(--accent) 45%, var(--line))">
+          <h3 style="color:var(--accent)">The bug worth telling you about</h3>
+          <p style="font-size:.9rem;margin:0">
+            First run with real volume: <strong>zero trades</strong>. You can only sell shares you own,
+            and only own them by buying — on a new exchange nobody can start. The logs were correct;
+            the market was deadlocked. Real venues solve it with <strong>issuance</strong>, so we model it too.
+          </p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+</div>
+
+<div class="ladder" role="tablist" aria-label="Slides"></div>
+
+<div class="chrome">
+  <span>Mini Stock Exchange Platform · SWE 4602</span>
+  <nav>
+    <button type="button" data-prev aria-label="Previous slide">← prev</button>
+    <span class="mono" data-counter style="align-self:center;padding:0 .4rem">1 / 6</span>
+    <button type="button" data-next aria-label="Next slide">next →</button>
+  </nav>
+</div>
+
+<script>
+  (function () {
+    const slides = Array.from(document.querySelectorAll(".slide"));
+    const ladder = document.querySelector(".ladder");
+    const counter = document.querySelector("[data-counter]");
+    let index = 0;
+
+    slides.forEach((_, i) => {
+      const rung = document.createElement("button");
+      rung.type = "button";
+      rung.className = "rung";
+      rung.setAttribute("role", "tab");
+      rung.setAttribute("aria-label", "Slide " + (i + 1));
+      rung.addEventListener("click", () => show(i));
+      ladder.appendChild(rung);
+    });
+    const rungs = Array.from(ladder.children);
+
+    function show(next) {
+      index = Math.max(0, Math.min(slides.length - 1, next));
+      slides.forEach((s, i) => i === index ? s.setAttribute("data-active", "") : s.removeAttribute("data-active"));
+      rungs.forEach((r, i) => r.setAttribute("aria-current", i === index ? "true" : "false"));
+      counter.textContent = (index + 1) + " / " + slides.length;
+      window.scrollTo(0, 0);
+    }
+
+    document.querySelector("[data-next]").addEventListener("click", () => show(index + 1));
+    document.querySelector("[data-prev]").addEventListener("click", () => show(index - 1));
+
+    document.addEventListener("keydown", (e) => {
+      if (["ArrowRight", "PageDown", " "].includes(e.key)) { e.preventDefault(); show(index + 1); }
+      else if (["ArrowLeft", "PageUp"].includes(e.key)) { e.preventDefault(); show(index - 1); }
+      else if (e.key === "Home") show(0);
+      else if (e.key === "End") show(slides.length - 1);
+    });
+
+    show(0);
+  })();
+</script>
