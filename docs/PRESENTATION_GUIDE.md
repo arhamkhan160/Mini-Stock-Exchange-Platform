@@ -13,7 +13,7 @@ A stock exchange is a **matchmaker for buyers and sellers of shares**. It does n
 set prices and it does not own anything. It keeps a list of who wants to buy and
 who wants to sell, and whenever a buyer's price meets a seller's price, it pairs
 them and records the trade.
-
+SeedPassw0rd!
 ## The vocabulary you must be fluent in
 
 **Share (or stock)** — a unit of ownership in a company. "10 shares of AAPL" means

@@ -5,7 +5,7 @@
 INFRA := postgres-user postgres-account postgres-order postgres-market-primary \
          postgres-market-replica postgres-portfolio postgres-notification redis rabbitmq
 
-.PHONY: help env infra up down nuke restart logs ps smoke seed mm repl replica-lag health \
+.PHONY: help env infra up down nuke restart logs ps smoke seed mm live repl replica-lag health \
         test test-contract test-routes selfcheck verify
 
 help:
@@ -18,7 +18,7 @@ help:
 	@echo "make ps       - container status"
 	@echo "make health   - curl /health on every service"
 	@echo "make seed     - seed candle history and run the market-maker bot"
-	@echo "make mm       - run the market maker in a loop (live demo)"
+	@echo "make live     - keep the market moving during a presentation"
 	@echo "make test     - offline tests: contract + routes (no docker needed)"
 	@echo "make selfcheck- per-service self-checks"
 	@echo "make verify   - verify a RUNNING stack (health, queues, replication)"
@@ -76,6 +76,11 @@ verify:
 
 seed:
 	python infra/seed/seed_market_data.py && python infra/seed/market_maker.py
+
+# Background market activity for the presentation: prices drift, trades
+# print, candles form, the chart moves. Ctrl+C to stop.
+live:
+	python infra/seed/live_market.py
 
 mm:
 	python infra/seed/market_maker.py --loop
