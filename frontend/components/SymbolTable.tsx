@@ -5,7 +5,7 @@ import Link from "next/link";
 import { MarketAPI, ApiError } from "@/lib/api";
 import { useLivePrices } from "@/lib/ws";
 import { money, pct, price as fmtPrice, toneOf } from "@/lib/format";
-import { Button, Card, Empty, ErrorBox, Spinner, Table } from "./ui";
+import { Button, Card, Empty, ErrorBox, LiveDot, Row, Spinner, Table } from "./ui";
 import type { SymbolQuote } from "@/lib/types";
 
 function useFlash(value: string | undefined): "up" | "down" | null {
@@ -30,21 +30,23 @@ function SymbolRow({ quote, livePrice }: { quote: SymbolQuote; livePrice: string
   const flash = useFlash(livePrice);
 
   return (
-    <tr className="border-b border-line last:border-0">
-      <td className="px-3 py-3">
+    <Row>
+      <td className="px-3 py-2.5">
         <div className="font-semibold text-ink">{quote.symbol}</div>
         <div className="text-xs text-muted">{quote.name}</div>
       </td>
-      <td className={`num px-3 py-3 text-ink ${flash ? `flash-${flash}` : ""}`}>{money(last)}</td>
-      <td className={`num px-3 py-3 ${toneOf(quote.change_pct)}`}>
+      <td className={`num px-3 py-2.5 text-right text-ink ${flash ? `flash-${flash}` : ""}`}>
+        {money(last)}
+      </td>
+      <td className={`num px-3 py-2.5 text-right ${toneOf(quote.change_pct)}`}>
         {fmtPrice(quote.change)} ({pct(quote.change_pct)})
       </td>
-      <td className="px-3 py-3 text-right">
+      <td className="px-3 py-2.5 text-right">
         <Link href={`/market/${quote.symbol}`}>
-          <Button variant="ghost">Trade</Button>
+          <Button variant="ghost" size="sm">Trade</Button>
         </Link>
       </td>
-    </tr>
+    </Row>
   );
 }
 
@@ -69,14 +71,10 @@ export default function SymbolTable() {
   return (
     <Card
       title="Live markets"
-      right={
-        <span className="flex items-center gap-1.5 text-xs text-muted">
-          <span className={`h-1.5 w-1.5 rounded-full ${status === "live" ? "bg-up" : "bg-warn"}`} />
-          {status === "live" ? "Live" : status === "connecting" ? "Connecting…" : "Reconnecting…"}
-        </span>
-      }
+      right={<LiveDot status={status} />}
+      padded={false}
     >
-      <Table head={["Symbol", "Last price", "24h change", ""]}>
+      <Table head={["Symbol", "Last price", "24h change", ""]} align={["left", "right", "right", "right"]}>
         {symbols.map((s) => (
           <SymbolRow key={s.symbol} quote={s} livePrice={prices[s.symbol]} />
         ))}
