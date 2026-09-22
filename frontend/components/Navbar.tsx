@@ -35,7 +35,7 @@ export default function Navbar() {
 
   return (
     <header className="sticky top-0 z-40 border-b border-line bg-panel/90 backdrop-blur-md">
-      <nav className="mx-auto flex h-14 max-w-7xl items-center gap-6 px-4 sm:px-6">
+      <nav className="mx-auto flex h-14 max-w-7xl items-center gap-4 px-4 sm:gap-6 sm:px-6">
         <Link
           href="/"
           className="shrink-0 text-sm font-bold tracking-wide text-ink transition hover:text-accent"
@@ -44,7 +44,7 @@ export default function Navbar() {
         </Link>
 
         {user && (
-          <ul className="flex items-center gap-0.5">
+          <ul className="no-scrollbar -mx-1 flex min-w-0 items-center gap-0.5 overflow-x-auto px-1">
             {LINKS.map((l) => {
               const active = path === l.href;
               return (
@@ -52,7 +52,7 @@ export default function Navbar() {
                   <Link
                     href={l.href}
                     aria-current={active ? "page" : undefined}
-                    className={`relative rounded-md px-3 py-1.5 text-sm transition ${
+                    className={`relative whitespace-nowrap rounded-md px-3 py-1.5 text-sm transition ${
                       active
                         ? "bg-panel2 font-medium text-ink"
                         : "text-muted hover:bg-panel2/60 hover:text-ink"
@@ -66,7 +66,7 @@ export default function Navbar() {
           </ul>
         )}
 
-        <div className="ml-auto flex items-center gap-3">
+        <div className="ml-auto flex shrink-0 items-center gap-2 sm:gap-3">
           {user ? (
             <>
               {available !== null && (

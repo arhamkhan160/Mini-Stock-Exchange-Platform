@@ -18,6 +18,10 @@ body {
   background-color: rgba(76, 141, 255, 0.28);
 }
 
+/* A scroll container with no visible scrollbar — the nav links on a phone. */
+.no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+.no-scrollbar::-webkit-scrollbar { display: none; }
+
 /* Numbers in tables must not jitter as prices tick. */
 .num {
   font-variant-numeric: tabular-nums;

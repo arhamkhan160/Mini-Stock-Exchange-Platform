@@ -69,11 +69,11 @@ export default function OrderBook({ symbol, onPriceClick }: OrderBookProps) {
       key={`${tone}-${level.price}`}
       onClick={() => pick(level.price)}
       title="Click to fill the order ticket with this price"
-      className="relative grid w-full grid-cols-3 px-2 py-1 text-right text-xs transition hover:bg-panel2"
+      className="relative grid w-full grid-cols-3 rounded px-2 py-1 text-right text-xs transition-colors hover:bg-panel2"
     >
       <span
         aria-hidden
-        className={`absolute inset-y-0 right-0 ${tone === "up" ? "bg-up/10" : "bg-down/10"}`}
+        className={`absolute inset-y-0 right-0 rounded-sm ${tone === "up" ? "bg-up/15" : "bg-down/15"}`}
         style={{ width: `${(running / maxDepth) * 100}%` }}
       />
       <span className={`num relative text-left ${tone === "up" ? "text-up" : "text-down"}`}>
@@ -97,7 +97,7 @@ export default function OrderBook({ symbol, onPriceClick }: OrderBookProps) {
         <Empty title="The book is empty" hint="Place a limit order and it will rest here." />
       ) : (
         <div className="space-y-1">
-          <div className="grid grid-cols-3 px-2 text-right text-[11px] uppercase tracking-wide text-muted">
+          <div className="grid grid-cols-3 px-2 pb-1 text-right text-2xs uppercase tracking-wider text-faint">
             <span className="text-left">Price</span>
             <span>Size</span>
             <span>Orders</span>

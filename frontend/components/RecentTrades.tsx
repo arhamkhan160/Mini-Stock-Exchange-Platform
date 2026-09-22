@@ -47,13 +47,13 @@ export default function RecentTrades({ symbol }: RecentTradesProps) {
         <Empty title="No trades yet" hint="Trades appear the moment two orders cross." />
       ) : (
         <div className="space-y-1">
-          <div className="grid grid-cols-3 px-2 text-right text-[11px] uppercase tracking-wide text-muted">
+          <div className="grid grid-cols-3 px-2 pb-1 text-right text-2xs uppercase tracking-wider text-faint">
             <span className="text-left">Price</span>
             <span>Size</span>
             <span>Time</span>
           </div>
           {(trades ?? []).map((t) => (
-            <div key={t.trade_id} className="grid grid-cols-3 px-2 py-1 text-right text-xs">
+            <div key={t.trade_id} className="grid grid-cols-3 rounded px-2 py-1 text-right text-xs transition-colors hover:bg-panel2">
               {/* Coloured by who crossed the spread, which is how a tape reads. */}
               <span className={`num text-left ${t.aggressor_side === "BUY" ? "text-up" : "text-down"}`}>
                 {fmtPrice(t.price)}

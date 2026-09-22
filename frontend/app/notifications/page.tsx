@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import Protected from "@/components/Protected";
-import { Button, Card, Empty, ErrorBox, Spinner } from "@/components/ui";
+import { Button, Card, Empty, ErrorBox, PageHeader, Segmented, Spinner } from "@/components/ui";
 import { NOTIFICATION_ICON, NOTIFICATION_TONE } from "@/components/NotificationBell";
 import { NotificationAPI, ApiError } from "@/lib/api";
 import { timeAgo } from "@/lib/format";
@@ -79,46 +79,35 @@ function NotificationsInner() {
   const unread = items.filter((i) => !i.is_read).length;
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-lg font-semibold text-ink">Notifications</h1>
-          <p className="text-sm text-muted">
-            Fill, cancellation and rejection alerts, delivered asynchronously.
-          </p>
-        </div>
-        <Button variant="ghost" onClick={markAll} disabled={unread === 0}>
-          Mark all read
-        </Button>
-      </div>
+    <div className="space-y-6">
+      <PageHeader
+        title="Notifications"
+        subtitle="Fill, cancellation and rejection alerts, delivered asynchronously."
+        right={
+          <Button variant="ghost" size="sm" onClick={markAll} disabled={unread === 0}>
+            Mark all read
+          </Button>
+        }
+      />
 
       <Card
         title={unreadOnly ? "Unread" : "All notifications"}
         right={
-          <div className="flex gap-1">
-            <button
-              onClick={() => setUnreadOnly(false)}
-              className={`rounded px-2 py-1 text-xs transition ${
-                !unreadOnly ? "bg-panel2 text-ink" : "text-muted hover:text-ink"
-              }`}
-            >
-              All
-            </button>
-            <button
-              onClick={() => setUnreadOnly(true)}
-              className={`rounded px-2 py-1 text-xs transition ${
-                unreadOnly ? "bg-panel2 text-ink" : "text-muted hover:text-ink"
-              }`}
-            >
-              Unread
-            </button>
-          </div>
+          <Segmented
+            label="Filter notifications"
+            value={unreadOnly ? "unread" : "all"}
+            onChange={(v) => setUnreadOnly(v === "unread")}
+            options={[
+              { value: "all", label: "All" },
+              { value: "unread", label: "Unread" },
+            ]}
+          />
         }
       >
         {error && <ErrorBox message={error} />}
 
         {loading ? (
-          <Spinner />
+          <Spinner label="Loading notifications…" />
         ) : items.length === 0 ? (
           <Empty
             title={unreadOnly ? "No unread notifications" : "No notifications yet"}

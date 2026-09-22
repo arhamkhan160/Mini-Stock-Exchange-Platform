@@ -5,7 +5,7 @@ import Protected from "@/components/Protected";
 import DepositForm from "@/components/DepositForm";
 import { AccountAPI, ApiError } from "@/lib/api";
 import { money, timeAgo } from "@/lib/format";
-import { Card, Empty, ErrorBox, Spinner, Table, Tone } from "@/components/ui";
+import { Card, Empty, ErrorBox, PageHeader, Row, Spinner, Table, Tone } from "@/components/ui";
 import type { Balance, Transaction } from "@/lib/types";
 
 const TX_BADGE: Record<Transaction["type"], string> = {
@@ -41,14 +41,14 @@ function WalletContent() {
 
   return (
     <div className="space-y-6">
-      <h1 className="text-xl font-semibold text-ink">Wallet</h1>
+      <PageHeader title="Wallet" subtitle="Your virtual cash, reservations and ledger." />
 
       {error && <ErrorBox message={error} />}
 
       <div className="grid grid-cols-1 gap-6 md:grid-cols-3">
         <div className="space-y-6 md:col-span-1">
           <Card title="Available balance">
-            <div className="num mb-4 text-3xl font-bold text-ink">
+            <div className="num mb-4 text-2xl font-semibold text-ink">
               {balance ? money(balance.available_balance) : "—"}
             </div>
             <div className="space-y-2 border-t border-line pt-4 text-sm">
@@ -72,27 +72,30 @@ function WalletContent() {
         </div>
 
         <div className="md:col-span-2">
-          <Card title="Transaction history">
+          <Card title="Transaction history" padded={loading || transactions.length === 0}>
             {loading ? (
               <Spinner label="Loading transactions…" />
             ) : transactions.length === 0 ? (
               <Empty title="No transactions yet" hint="Deposit funds to get started." />
             ) : (
-              <Table head={["Date", "Type", "Amount", "Balance after", "Details"]}>
+              <Table
+                head={["Date", "Type", "Amount", "Balance after", "Details"]}
+                align={["left", "left", "right", "right", "left"]}
+              >
                 {transactions.map((tx) => (
-                  <tr key={tx.id} className="border-b border-line last:border-0">
-                    <td className="px-3 py-2 text-sm text-muted">{timeAgo(tx.created_at)}</td>
-                    <td className="px-3 py-2">
-                      <span className={`rounded px-2 py-0.5 text-[11px] font-semibold ${TX_BADGE[tx.type] ?? "bg-panel2 text-muted"}`}>
+                  <Row key={tx.id}>
+                    <td className="whitespace-nowrap px-3 py-2.5 text-xs text-muted">{timeAgo(tx.created_at)}</td>
+                    <td className="px-3 py-2.5">
+                      <span className={`inline-block whitespace-nowrap rounded px-2 py-0.5 text-2xs font-semibold ${TX_BADGE[tx.type] ?? "bg-panel2 text-muted"}`}>
                         {tx.type}
                       </span>
                     </td>
-                    <td className="px-3 py-2">
+                    <td className="px-3 py-2.5 text-right">
                       <Tone value={tx.amount}>{money(tx.amount)}</Tone>
                     </td>
-                    <td className="num px-3 py-2 text-ink">{money(tx.balance_after)}</td>
-                    <td className="px-3 py-2 text-sm text-muted">{tx.description || tx.reference_id || "—"}</td>
-                  </tr>
+                    <td className="num px-3 py-2.5 text-right text-ink">{money(tx.balance_after)}</td>
+                    <td className="px-3 py-2.5 text-xs text-muted">{tx.description || tx.reference_id || "—"}</td>
+                  </Row>
                 ))}
               </Table>
             )}
