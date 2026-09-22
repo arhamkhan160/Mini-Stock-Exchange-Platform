@@ -10,12 +10,31 @@ html,
 body {
   @apply bg-bg text-ink;
   min-height: 100%;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+::selection {
+  background-color: rgba(76, 141, 255, 0.28);
 }
 
 /* Numbers in tables must not jitter as prices tick. */
 .num {
   font-variant-numeric: tabular-nums;
   font-family: ui-monospace, Consolas, Menlo, monospace;
+  font-feature-settings: "zero" 1;
+  letter-spacing: -0.01em;
+}
+
+/* Keyboard focus must stay visible. Inputs set `outline-none` and swap their
+   border colour, which mouse users read fine but leaves keyboard users lost, so
+   every focusable element gets a ring that only shows for keyboard focus. */
+*:focus-visible {
+  outline: none;
+  box-shadow:
+    0 0 0 2px theme("colors.bg"),
+    0 0 0 4px theme("colors.accent");
+  border-radius: theme("borderRadius.md");
 }
 
 /* Brief flash when a price updates — used by PriceCell. */
@@ -30,6 +49,31 @@ body {
 .flash-up   { animation: flash-up 0.6s ease-out; }
 .flash-down { animation: flash-down 0.6s ease-out; }
 
+/* A trading screen animates constantly — prices flash, spinners turn, toasts
+   slide. That is exactly the motion that triggers vestibular symptoms, so honour
+   the OS setting rather than overriding it. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
 ::-webkit-scrollbar { width: 10px; height: 10px; }
-::-webkit-scrollbar-track { background: #0b0e14; }
-::-webkit-scrollbar-thumb { background: #1f2637; border-radius: 6px; }
+::-webkit-scrollbar-track { background: theme("colors.bg"); }
+::-webkit-scrollbar-thumb {
+  background: theme("colors.line");
+  border-radius: 6px;
+  border: 2px solid theme("colors.bg");
+}
+::-webkit-scrollbar-thumb:hover { background: theme("colors.line2"); }
+
+/* Firefox */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: theme("colors.line") theme("colors.bg");
+}

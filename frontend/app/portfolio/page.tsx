@@ -2,7 +2,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { PortfolioAPI, NotificationAPI } from '@/lib/api';
 import { Portfolio } from '@/lib/types';
-import { Spinner, ErrorBox, Card, Tone, Empty } from '@/components/ui';
+import { Spinner, ErrorBox, Card, Empty, PageHeader, Stat, Badge } from '@/components/ui';
 import Protected from '@/components/Protected';
 import HoldingsTable from '@/components/HoldingsTable';
 
@@ -48,8 +48,8 @@ export default function PortfolioPage() {
     return () => clearInterval(interval);
   }, [fetchPortfolio]);
 
-  if (loading) return <div className="p-8 text-center"><Spinner /></div>;
-  if (error) return <div className="p-8"><ErrorBox message={error} /></div>;
+  if (loading) return <Spinner label="Loading your portfolio…" />;
+  if (error) return <ErrorBox message={error} />;
   if (!portfolio) return null;
 
   const { totals, holdings } = portfolio;
@@ -57,59 +57,41 @@ export default function PortfolioPage() {
 
   return (
     <Protected>
-      <div className="max-w-7xl mx-auto p-4 space-y-6">
-        <div className="flex items-center justify-between">
-          <h1 className="text-2xl font-bold text-white">Your Portfolio</h1>
-          {updating && <span className="text-sm text-gray-400 flex items-center gap-2"><Spinner /> updating...</span>}
+      <div className="space-y-6">
+        <PageHeader
+          title="Your portfolio"
+          subtitle="Positions, cost basis and profit & loss."
+          right={
+            updating ? (
+              <span className="flex items-center gap-2 text-xs text-muted">
+                <Spinner inline /> Updating…
+              </span>
+            ) : undefined
+          }
+        />
+
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <Stat label="Total market value" value={totals.total_market_value} />
+          <Stat label="Total cost basis" value={totals.total_cost_basis} />
+          <Stat label="Unrealized P&L" value={totals.total_unrealized_pnl} tone />
+          <Stat label="Realized P&L" value={totals.total_realized_pnl} tone />
         </div>
 
-        {/* Summary Cards */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-          <Card className="p-4">
-            <h3 className="text-sm text-gray-400 font-medium">Total Market Value</h3>
-            <p className="text-2xl font-bold text-white mt-1 num">${totals.total_market_value}</p>
-          </Card>
-          
-          <Card className="p-4">
-            <h3 className="text-sm text-gray-400 font-medium">Total Cost Basis</h3>
-            <p className="text-2xl font-bold text-white mt-1 num">${totals.total_cost_basis}</p>
-          </Card>
-
-          <Card className="p-4">
-            <h3 className="text-sm text-gray-400 font-medium">Unrealized P&L</h3>
-            <div className="text-2xl font-bold mt-1 num">
-              <Tone value={Number(totals.total_unrealized_pnl)} format="money" prefix="$" />
-            </div>
-          </Card>
-
-          <Card className="p-4">
-            <h3 className="text-sm text-gray-400 font-medium">Realized P&L</h3>
-            <div className="text-2xl font-bold mt-1 num">
-              <Tone value={Number(totals.total_realized_pnl)} format="money" prefix="$" />
-            </div>
-          </Card>
-        </div>
-
-        {/* Holdings */}
-        <div className="space-y-2">
-          <div className="flex items-center justify-between">
-            <h2 className="text-xl font-semibold text-white">Holdings</h2>
-            {anyStale && <span className="text-sm text-yellow-500">Prices may be delayed</span>}
-          </div>
-          
+        <Card
+          title="Holdings"
+          subtitle={holdings.length > 0 ? `${holdings.length} position${holdings.length === 1 ? '' : 's'}` : undefined}
+          right={anyStale ? <Badge variant="warning">Prices may be delayed</Badge> : undefined}
+          padded={holdings.length === 0}
+        >
           {holdings.length === 0 ? (
-            <Card className="p-8">
-              <Empty 
-                title="You don't own anything yet" 
-                subtitle="Place your first order to start building your portfolio." 
-              />
-            </Card>
+            <Empty
+              title="You don't own anything yet"
+              subtitle="Place your first order to start building your portfolio."
+            />
           ) : (
-            <Card className="p-0 overflow-hidden">
-              <HoldingsTable holdings={holdings} />
-            </Card>
+            <HoldingsTable holdings={holdings} />
           )}
-        </div>
+        </Card>
       </div>
     </Protected>
   );
