@@ -4,10 +4,10 @@
 // These MIRROR tailwind.config.ts. If you change a token there, change it here —
 // they are the same design decision expressed twice because two renderers need it.
 export const chartTheme = {
-  panel: "#11151f",   // colors.panel   — chart background
-  line: "#1f2637",    // colors.line    — horizontal grid
-  line2: "#2a3348",   // colors.line2   — crosshair
-  muted: "#8b93a7",   // colors.muted   — axis text
-  up: "#26a69a",      // colors.up      — bullish candle
-  down: "#ef5350",    // colors.down    — bearish candle
+  panel: "#ffffff",   // colors.panel   — chart background
+  line: "#e3e7ef",    // colors.line    — horizontal grid
+  line2: "#cbd2df",   // colors.line2   — crosshair
+  muted: "#596273",   // colors.muted   — axis text
+  up: "#00776a",      // colors.up      — bullish candle
+  down: "#c62828",    // colors.down    — bearish candle
 } as const;

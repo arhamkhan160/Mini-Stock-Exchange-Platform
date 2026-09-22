@@ -1,31 +1,36 @@
 import type { Config } from "tailwindcss";
 
-// Single dark trading-terminal theme. Everyone uses these tokens so four people's
-// pages look like one product. Do not introduce new raw hex values in pages.
+// Single LIGHT trading-terminal theme. Everyone uses these tokens so four
+// people's pages look like one product. Do not introduce new raw hex values in
+// pages — a page that hand-rolls a colour is the thing that breaks the theme.
 //
 // The colours below are deliberate and verified, not taste:
 //   - every ink/status token clears WCAG AA (>= 4.5:1) on bg, panel AND panel2;
+//     the worst case is `up` at 4.91:1.
 //   - `up`/`down` are teal/red rather than green/red, which keeps gain vs loss
-//     separable for deuteranopia (dE 11.6, where 8 is the target). Do not
-//     "fix" them to green/red.
+//     separable for colour-vision deficiency (dE 12.0 protan, where 8 is the
+//     target). Do not "fix" them to green/red.
+//   - `up` trades a little chroma (0.092 vs the 0.1 ideal) for that AA contrast.
+//     It is safe here because gain/loss is never colour-alone — `Tone` always
+//     prints an explicit +/- sign next to the number.
 const config: Config = {
   content: ["./app/**/*.{ts,tsx}", "./components/**/*.{ts,tsx}", "./lib/**/*.{ts,tsx}"],
   theme: {
     extend: {
       colors: {
-        bg: "#0b0e14",        // page background
-        panel: "#11151f",     // cards / panels
-        panel2: "#161b28",    // hover / nested panel
-        panel3: "#1b2233",    // active / pressed
-        line: "#1f2637",      // borders
-        line2: "#2a3348",     // emphasised borders, dividers on panel2
-        ink: "#e6e9f0",       // primary text
-        muted: "#8b93a7",     // secondary text
-        faint: "#5d6579",     // tertiary text — labels, axis ticks
-        up: "#26a69a",        // buy / gain
-        down: "#ef5350",      // sell / loss
-        accent: "#4c8dff",    // links, primary action
-        warn: "#f0b429",
+        bg: "#f7f8fa",        // page background
+        panel: "#ffffff",     // cards / panels
+        panel2: "#f1f3f7",    // hover / nested panel
+        panel3: "#e7ebf2",    // active / pressed
+        line: "#e3e7ef",      // borders
+        line2: "#cbd2df",     // emphasised borders, dividers on panel2
+        ink: "#131722",       // primary text
+        muted: "#596273",     // secondary text
+        faint: "#5f6878",     // tertiary text — labels, axis ticks
+        up: "#00776a",        // buy / gain
+        down: "#c62828",      // sell / loss
+        accent: "#1d4ed8",    // links, primary action
+        warn: "#8f5000",
       },
       fontFamily: {
         sans: ["ui-sans-serif", "system-ui", "Segoe UI", "Roboto", "sans-serif"],
@@ -47,10 +52,11 @@ const config: Config = {
         lg: "0.5rem",
         xl: "0.75rem",
       },
+      // On a light surface depth comes from soft shadow, not from a lighter fill.
       boxShadow: {
-        card: "0 1px 2px rgba(0,0,0,0.4)",
-        raised: "0 4px 16px -4px rgba(0,0,0,0.6)",
-        pop: "0 12px 32px -8px rgba(0,0,0,0.7)",
+        card: "0 1px 2px rgba(16,24,40,0.05)",
+        raised: "0 4px 12px -2px rgba(16,24,40,0.10), 0 2px 4px -2px rgba(16,24,40,0.06)",
+        pop: "0 12px 28px -8px rgba(16,24,40,0.18)",
       },
       keyframes: {
         "fade-in": {
