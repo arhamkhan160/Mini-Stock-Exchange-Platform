@@ -30,12 +30,25 @@ def limit_for(method: str, path: str, claims: dict | None) -> int:
     return DEFAULT_LIMIT
 
 
-async def enforce(redis, identity: str, limit: int) -> None:
-    """Raise 429 when `identity` exceeds `limit` within the current minute."""
+def bucket_for(method: str, path: str) -> str:
+    """Which counter a request is charged to.
+
+    Order placement has its own bucket. Sharing one counter across every path
+    meant the frontend's background polling (~70 GETs/min while idle) pushed the
+    shared count past ORDER_PLACEMENT_LIMIT within seconds, after which *every*
+    order 429'd even though the user had placed none.
+    """
+    if method == "POST" and path.startswith("/api/orders"):
+        return "orders"
+    return "default"
+
+
+async def enforce(redis, identity: str, limit: int, bucket: str = "default") -> None:
+    """Raise 429 when `identity` exceeds `limit` for `bucket` within the current minute."""
     global _redis_warned_at
 
     window = int(time.time() // 60)
-    key = f"ratelimit:{identity}:{window}"
+    key = f"ratelimit:{identity}:{bucket}:{window}"
     try:
         count = await redis.incr(key)
         if count == 1:

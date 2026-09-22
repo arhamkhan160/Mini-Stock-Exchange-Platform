@@ -38,6 +38,16 @@ class Settings(BaseSettings):
     PORTFOLIO_SERVICE_URL: str = "http://portfolio-service:8006"
     NOTIFICATION_SERVICE_URL: str = "http://notification-service:8007"
 
+    # Browser origins allowed to call the gateway. Comma-separated. The default
+    # is the documented frontend port; hosts that publish the frontend elsewhere
+    # (e.g. Windows reserves 3000) must add that origin or every browser call
+    # fails preflight with "No 'Access-Control-Allow-Origin' header".
+    CORS_ORIGINS: str = "http://localhost:3000"
+
+    @property
+    def cors_origin_list(self) -> list[str]:
+        return [o.strip() for o in self.CORS_ORIGINS.split(",") if o.strip()]
+
     LOG_LEVEL: str = "INFO"
 
 

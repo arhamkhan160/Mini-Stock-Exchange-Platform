@@ -15,6 +15,7 @@ exists under services/ IS expected to answer.
 
 import base64
 import json
+import os
 import subprocess
 import sys
 import urllib.error
@@ -209,12 +210,16 @@ def check_redis() -> None:
 
 
 def check_frontend() -> None:
+    # Host port only. Some hosts cannot publish 3000 - on Windows it can
+    # fall inside a reserved WinNAT range - so docker-compose.override.yml
+    # remaps it and FRONTEND_PORT points this check at the same place.
+    port = os.getenv("FRONTEND_PORT", "3000")
     print("\n-- frontend --")
     try:
-        with urllib.request.urlopen("http://localhost:3000", timeout=8) as response:
-            record(PASS if response.status == 200 else FAIL, "frontend :3000", f"HTTP {response.status}")
+        with urllib.request.urlopen(f"http://localhost:{port}", timeout=8) as response:
+            record(PASS if response.status == 200 else FAIL, f"frontend :{port}", f"HTTP {response.status}")
     except Exception as exc:
-        record(PENDING, "frontend :3000", str(exc)[:70])
+        record(PENDING, f"frontend :{port}", str(exc)[:70])
 
 
 def main() -> int:

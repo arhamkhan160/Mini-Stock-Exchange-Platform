@@ -22,7 +22,7 @@ from common.logging_setup import setup_logging
 from common.redis_client import make_redis
 
 from .auth import assert_not_internal, authenticate
-from .ratelimit import enforce, limit_for
+from .ratelimit import bucket_for, enforce, limit_for
 from .proxy import forward
 from .routing import ROUTES, resolve
 from .ws_proxy import bridge_market
@@ -79,7 +79,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=settings.cors_origin_list,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -138,7 +138,12 @@ async def proxy(request: Request, upstream_path: str) -> Response:
 
     # 5. Rate limit, keyed per user when known, otherwise per client IP.
     identity = claims.get("sub") if claims else (request.client.host if request.client else "anonymous")
-    await enforce(app.state.redis, str(identity), limit_for(request.method, path, claims))
+    await enforce(
+        app.state.redis,
+        str(identity),
+        limit_for(request.method, path, claims),
+        bucket_for(request.method, path),
+    )
 
     request_id = request.headers.get("x-request-id") or str(uuid.uuid4())
     extra = {"X-Request-Id": request_id}
