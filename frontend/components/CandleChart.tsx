@@ -5,6 +5,7 @@ import { MarketAPI } from '@/lib/api';
 import { subscribeMarket } from '@/lib/ws';
 import { Spinner, Empty } from './ui';
 import { Candle } from '@/lib/types';
+import { chartTheme } from '@/lib/theme';
 
 export default function CandleChart({ symbol, interval }: { symbol: string; interval: "1m" | "5m" }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -21,15 +22,28 @@ export default function CandleChart({ symbol, interval }: { symbol: string; inte
     if (!ref.current) return;
     
     chart.current = createChart(ref.current, {
-      layout: { background: { type: ColorType.Solid, color: '#11151f' }, textColor: '#8b93a7' },
-      grid: { vertLines: { color: '#1f2637' }, horzLines: { color: '#1f2637' } },
-      timeScale: { timeVisible: true, secondsVisible: false },
+      layout: {
+        background: { type: ColorType.Solid, color: chartTheme.panel },
+        textColor: chartTheme.muted,
+        fontSize: 11,
+      },
+      // Recessive grid: price levels help, a vertical rule per candle does not.
+      grid: {
+        vertLines: { visible: false },
+        horzLines: { color: chartTheme.line },
+      },
+      crosshair: {
+        vertLine: { color: chartTheme.line2, width: 1, labelBackgroundColor: chartTheme.line2 },
+        horzLine: { color: chartTheme.line2, width: 1, labelBackgroundColor: chartTheme.line2 },
+      },
+      rightPriceScale: { borderColor: chartTheme.line },
+      timeScale: { timeVisible: true, secondsVisible: false, borderColor: chartTheme.line },
       autoSize: true,
     });
     
     series.current = chart.current.addCandlestickSeries({     // v4 API
-      upColor: '#26a69a', downColor: '#ef5350',
-      wickUpColor: '#26a69a', wickDownColor: '#ef5350', borderVisible: false,
+      upColor: chartTheme.up, downColor: chartTheme.down,
+      wickUpColor: chartTheme.up, wickDownColor: chartTheme.down, borderVisible: false,
     });
 
     let active = true;
@@ -110,7 +124,7 @@ export default function CandleChart({ symbol, interval }: { symbol: string; inte
   // line, never called loadData(), and never cleared `loading` — the chart sat
   // on "Loading…" forever. States overlay the container instead of replacing it.
   return (
-    <div className="relative h-[420px] w-full overflow-hidden rounded-xl border border-[#1f2637]">
+    <div className="relative h-[420px] w-full overflow-hidden rounded-lg border border-line bg-panel shadow-card">
       <div ref={ref} className="absolute inset-0" />
       {loading && (
         <div className="absolute inset-0 flex items-center justify-center bg-panel/80">

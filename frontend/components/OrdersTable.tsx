@@ -5,9 +5,10 @@
 import Link from "next/link";
 import { clockTime, price as fmtPrice, qty } from "@/lib/format";
 import type { Order } from "@/lib/types";
-import { Badge, Button, Empty, Table } from "./ui";
+import { Badge, Button, Empty, Row, Table } from "./ui";
 
 const HEAD = ["Time", "Symbol", "Side", "Type", "Price", "Filled", "Avg fill", "Status", ""];
+const ALIGN = ["left", "left", "left", "left", "right", "right", "right", "left", "right"] as const;
 
 export interface OrdersTableProps {
   orders: Order[];
@@ -24,9 +25,9 @@ export default function OrdersTable({
   if (orders.length === 0) return <Empty title={emptyTitle} hint={emptyHint} />;
 
   return (
-    <Table head={HEAD}>
+    <Table head={HEAD} align={[...ALIGN]}>
       {orders.map((o) => (
-        <tr key={o.id} className="border-b border-line/60 last:border-0">
+        <Row key={o.id}>
           <td className="num px-3 py-2 text-muted">{clockTime(o.created_at)}</td>
           <td className="px-3 py-2">
             <Link href={`/market/${o.symbol}`} className="num text-accent hover:underline">
@@ -35,11 +36,11 @@ export default function OrdersTable({
           </td>
           <td className="px-3 py-2"><Badge value={o.side} /></td>
           <td className="px-3 py-2 text-muted">{o.order_type}</td>
-          <td className="num px-3 py-2 text-ink">{o.price ? fmtPrice(o.price) : "MKT"}</td>
-          <td className="num px-3 py-2 text-ink">
+          <td className="num px-3 py-2 text-right text-ink">{o.price ? fmtPrice(o.price) : "MKT"}</td>
+          <td className="num px-3 py-2 text-right text-ink">
             {qty(o.filled_quantity)} / {qty(o.quantity)}
           </td>
-          <td className="num px-3 py-2 text-muted">
+          <td className="num px-3 py-2 text-right text-muted">
             {o.filled_quantity > 0 ? fmtPrice(o.avg_fill_price) : "—"}
           </td>
           <td className="px-3 py-2">
@@ -53,7 +54,7 @@ export default function OrdersTable({
             {onCancel && (
               <Button
                 variant="danger"
-                className="px-2 py-1 text-xs"
+                size="sm"
                 disabled={o.status === "CANCEL_PENDING" || cancelling?.has(o.id)}
                 onClick={() => onCancel(o)}
               >
@@ -61,7 +62,7 @@ export default function OrdersTable({
               </Button>
             )}
           </td>
-        </tr>
+        </Row>
       ))}
     </Table>
   );

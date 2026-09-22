@@ -6,7 +6,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import OrdersTable from "@/components/OrdersTable";
 import Protected from "@/components/Protected";
 import { useToast } from "@/components/Toast";
-import { Card, ErrorBox, Spinner } from "@/components/ui";
+import { Card, ErrorBox, PageHeader, Spinner } from "@/components/ui";
 import { ApiError, OrderAPI } from "@/lib/api";
 import type { Order, OrderStatus } from "@/lib/types";
 
@@ -72,18 +72,15 @@ function OrdersInner() {
   const history = (orders ?? []).filter((o) => !NON_TERMINAL.includes(o.status));
 
   return (
-    <div className="space-y-4">
-      <div>
-        <h1 className="text-lg font-semibold text-ink">Orders</h1>
-        <p className="text-sm text-muted">
-          Working orders update on their own. A cancellation shows as “Cancelling…” until the
-          matching engine confirms it — it can still come back filled.
-        </p>
-      </div>
+    <div className="space-y-6">
+      <PageHeader
+        title="Orders"
+        subtitle="Working orders update on their own. A cancellation shows as “Cancelling…” until the matching engine confirms it — it can still come back filled."
+      />
 
       {error && <ErrorBox message={error} />}
 
-      <Card title={`Open orders (${open.length})`}>
+      <Card title={`Open orders (${open.length})`} padded={open.length === 0}>
         <OrdersTable
           orders={open}
           emptyTitle="No working orders"
@@ -93,7 +90,7 @@ function OrdersInner() {
         />
       </Card>
 
-      <Card title="History">
+      <Card title="History" padded={history.length === 0}>
         <OrdersTable
           orders={history}
           emptyTitle="No completed orders yet"
